@@ -66,7 +66,7 @@ function getRealIP(req) {
 // Obter informações do IP
 async function getIPInfo(ip) {
   try {
-    // Limpar o IP para remover o prefixo IPv6 (se estiver sendo executado em ambientes de proxy)
+    // Limpar o IP para remover o prefixo IPv6
     let cleanIp = ip;
     if (ip.includes('::ffff:')) {
       cleanIp = ip.replace('::ffff:', '');
@@ -88,54 +88,120 @@ async function getIPInfo(ip) {
       };
     }
     
-    // Use ipapi.co como alternativa mais confiável e com suporte HTTPS
-    const response = await fetch(`https://ipapi.co/${cleanIp}/json/`);
-    const data = await response.json();
-    
-    if (data.error) {
-      console.log('Erro na API de IP:', data.reason);
-      return {
-        ip: cleanIp,
-        location: 'Não encontrado',
-        isp: 'Desconhecido',
-        asn: 'Desconhecido',
-        org: 'Desconhecido'
-      };
+    // Tentar primeira API: ipapi.co
+    try {
+      const response = await fetch(`https://ipapi.co/${cleanIp}/json/`);
+      const data = await response.json();
+      
+      if (!data.error && data.city && data.country_name) {
+        return {
+          ip: cleanIp,
+          location: `${data.city || ''}, ${data.region || ''}, ${data.country_name || ''}`.replace(', ,', ','),
+          isp: data.org || 'Desconhecido',
+          asn: data.asn || 'Desconhecido',
+          org: data.org || 'Desconhecido'
+        };
+      }
+    } catch (error) {
+      console.log('Falha na primeira API de geolocalização:', error.message);
     }
     
-    return {
-      ip: cleanIp,
-      location: `${data.city || 'Desconhecido'}, ${data.region || 'Desconhecido'}, ${data.country_name || 'Desconhecido'}`,
-      isp: data.org || 'Desconhecido',
-      asn: data.asn || 'Desconhecido',
-      org: data.org || 'Desconhecido'
-    };
-  } catch (error) {
-    console.error('Erro ao obter informações do IP:', error);
-    
-    // Tentar um serviço alternativo em caso de falha
+    // Tentar segunda API: ipinfo.io
     try {
-      const fallbackResponse = await fetch(`https://ipinfo.io/${cleanIp}/json`);
-      const fallbackData = await fallbackResponse.json();
+      const response = await fetch(`https://ipinfo.io/${cleanIp}/json`);
+      const data = await response.json();
+      
+      if (data && !data.error && data.city && data.country) {
+        return {
+          ip: cleanIp,
+          location: `${data.city || ''}, ${data.region || ''}, ${data.country || ''}`.replace(', ,', ','),
+          isp: data.org || 'Desconhecido',
+          asn: data.org ? data.org.split(' ')[0] : 'Desconhecido',
+          org: data.org ? data.org.split(' ').slice(1).join(' ') : 'Desconhecido'
+        };
+      }
+    } catch (error) {
+      console.log('Falha na segunda API de geolocalização:', error.message);
+    }
+    
+    // Tentar terceira API: ip-api.com (HTTP apenas, use com cautela)
+    try {
+      const response = await fetch(`http://ip-api.com/json/${cleanIp}`);
+      const data = await response.json();
+      
+      if (data && data.status === 'success') {
+        return {
+          ip: cleanIp,
+          location: `${data.city || ''}, ${data.regionName || ''}, ${data.country || ''}`.replace(', ,', ','),
+          isp: data.isp || 'Desconhecido',
+          asn: data.as || 'Desconhecido',
+          org: data.org || 'Desconhecido'
+        };
+      }
+    } catch (error) {
+      console.log('Falha na terceira API de geolocalização:', error.message);
+    }
+    
+    // Tentar quarta API: geolocation-db.com (opção de backup)
+    try {
+      const response = await fetch(`https://geolocation-db.com/json/${cleanIp}`);
+      const data = await response.json();
+      
+      if (data && data.country_name) {
+        return {
+          ip: cleanIp,
+          location: `${data.city || ''}, ${data.state || ''}, ${data.country_name || ''}`.replace(', ,', ','),
+          isp: 'Desconhecido',
+          asn: 'Desconhecido',
+          org: 'Desconhecido'
+        };
+      }
+    } catch (error) {
+      console.log('Falha na quarta API de geolocalização:', error.message);
+    }
+    
+    // Se todas as APIs falharem, use dados básicos baseados no país pelo código IP
+    // Esta é uma solução de último recurso usando dados locais
+    try {
+      // Identificar país pelo primeiro octeto do IP (muito básico)
+      const ipFirstOctet = parseInt(cleanIp.split('.')[0]);
+      let location = 'Desconhecido';
+      
+      // Mapeamento muito básico de alguns intervalos comuns
+      if (ipFirstOctet >= 186 && ipFirstOctet <= 189) {
+        location = 'Brasil';
+      } else if (ipFirstOctet >= 72 && ipFirstOctet <= 79) {
+        location = 'Estados Unidos';
+      } else if (ipFirstOctet >= 81 && ipFirstOctet <= 91) {
+        location = 'Europa';
+      }
       
       return {
         ip: cleanIp,
-        location: fallbackData.city && fallbackData.region && fallbackData.country ? 
-                 `${fallbackData.city}, ${fallbackData.region}, ${fallbackData.country}` : 'Desconhecido',
-        isp: fallbackData.org || 'Desconhecido',
-        asn: fallbackData.org ? fallbackData.org.split(' ')[0] : 'Desconhecido',
-        org: fallbackData.org ? fallbackData.org.split(' ').slice(1).join(' ') : 'Desconhecido'
+        location: location !== 'Desconhecido' ? location : 'Localização não identificada',
+        isp: 'Desconhecido',
+        asn: 'Desconhecido',
+        org: 'Desconhecido'
       };
-    } catch (fallbackError) {
-      console.error('Erro no serviço alternativo de IP:', fallbackError);
+    } catch (e) {
+      // Se até isso falhar, retorne desconhecido
       return {
-        ip: cleanIp || ip,
-        location: 'Desconhecido',
+        ip: cleanIp,
+        location: 'Localização não identificada',
         isp: 'Desconhecido',
         asn: 'Desconhecido',
         org: 'Desconhecido'
       };
     }
+  } catch (error) {
+    console.error('Erro ao obter informações do IP:', error);
+    return {
+      ip: ip,
+      location: 'Erro na obtenção de dados',
+      isp: 'Desconhecido',
+      asn: 'Desconhecido',
+      org: 'Desconhecido'
+    };
   }
 }
 
@@ -405,6 +471,15 @@ app.get('/info/:linkId', (req, res) => {
       .device-icon {
         font-size: 1.5em;
       }
+      .no-map-info {
+        background-color: #f8f9fa;
+        padding: 15px;
+        border-radius: 8px;
+        text-align: center;
+        margin-top: 15px;
+        color: #7f8c8d;
+        font-style: italic;
+      }
     </style>
   </head>
   <body>
@@ -498,8 +573,9 @@ app.get('/info/:linkId', (req, res) => {
               <div class="trace-details">
                 <div class="trace-details-col">
                   <p><strong>IP:</strong> ${trace.ip}</p>
-                  <p><strong>Localização:</strong> ${trace.ipInfo.location}</p>
-                  <p><strong>Provedor:</strong> ${trace.ipInfo.isp}</p>
+                  <p><strong>Localização:</strong> ${trace.ipInfo.location && trace.ipInfo.location !== 'Desconhecido' ? trace.ipInfo.location : 'Não foi possível determinar a localização'}</p>
+                  <p><strong>Provedor:</strong> ${trace.ipInfo.isp && trace.ipInfo.isp !== 'Desconhecido' ? trace.ipInfo.isp : 'Informação indisponível'}</p>
+                  ${trace.ipInfo.asn && trace.ipInfo.asn !== 'Desconhecido' ? `<p><strong>ASN:</strong> ${trace.ipInfo.asn}</p>` : ''}
                 </div>
                 <div class="trace-details-col">
                   <p class="device-info"><span class="device-icon">${deviceIcon}</span> <strong>${deviceType.charAt(0).toUpperCase() + deviceType.slice(1)}</strong></p>
@@ -508,8 +584,12 @@ app.get('/info/:linkId', (req, res) => {
                   <p><strong>Origem:</strong> ${trace.referer}</p>
                 </div>
               </div>
-              ${trace.ipInfo.location !== 'Local (Simulado)' && trace.ipInfo.location !== 'Desconhecido' ? 
-                `<div class="map-container" id="map-${index}"></div>` : ''}
+              ${trace.ipInfo.location && trace.ipInfo.location !== 'Local (Simulado)' && 
+                trace.ipInfo.location !== 'Desconhecido' && 
+                trace.ipInfo.location !== 'Localização não identificada' && 
+                trace.ipInfo.location !== 'Erro na obtenção de dados' ? 
+                `<div class="map-container" id="map-${index}"></div>` : 
+                '<div class="no-map-info"><p>Mapa não disponível para este endereço IP</p></div>'}
             </div>
           `;
         }).join('')
@@ -532,30 +612,55 @@ app.get('/info/:linkId', (req, res) => {
       document.addEventListener('DOMContentLoaded', function() {
         // Inicializar mapas para cada acesso
         ${traces.map((trace, index) => {
-          if (trace.ipInfo.location !== 'Local (Simulado)' && trace.ipInfo.location !== 'Desconhecido') {
-            // Tentar extrair a localização
-            const locationParts = trace.ipInfo.location.split(',').map(part => part.trim());
-            // Usar coordenadas aproximadas baseadas no nome da cidade/país (apenas para ilustração)
+          if (trace.ipInfo.location && 
+              trace.ipInfo.location !== 'Local (Simulado)' && 
+              trace.ipInfo.location !== 'Desconhecido' && 
+              trace.ipInfo.location !== 'Localização não identificada' && 
+              trace.ipInfo.location !== 'Erro na obtenção de dados') {
+            
+            // Preparar a consulta para o serviço de geocodificação
+            // Se tivermos apenas o nome do país, usamos apenas ele
+            let searchQuery = trace.ipInfo.location;
+            
+            // Se a localização contém apenas um nome sem vírgulas, adicionamos a palavra "país" para melhorar a busca
+            if (!searchQuery.includes(',') && searchQuery.trim().split(' ').length === 1) {
+              searchQuery = `${searchQuery} país`;
+            }
+            
             return `
-              fetch('https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(trace.ipInfo.location)}')
-                .then(response => response.json())
-                .then(data => {
-                  if (data && data.length > 0) {
-                    const map${index} = L.map('map-${index}').setView([data[0].lat, data[0].lon], 10);
-                    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
-                      attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
-                    }).addTo(map${index});
-                    L.marker([data[0].lat, data[0].lon]).addTo(map${index})
-                      .bindPopup('${trace.ipInfo.location}')
-                      .openPopup();
-                  } else {
-                    document.getElementById('map-${index}').innerHTML = '<p style="padding: 15px; text-align: center;">Não foi possível carregar o mapa para esta localização.</p>';
-                  }
-                })
-                .catch(err => {
-                  console.error('Erro ao carregar mapa:', err);
-                  document.getElementById('map-${index}').innerHTML = '<p style="padding: 15px; text-align: center;">Não foi possível carregar o mapa para esta localização.</p>';
-                });
+              try {
+                fetch('https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(searchQuery)}&limit=1')
+                  .then(response => response.json())
+                  .then(data => {
+                    if (data && data.length > 0) {
+                      const mapElement = document.getElementById('map-${index}');
+                      if (mapElement) {
+                        const map${index} = L.map('map-${index}').setView([data[0].lat, data[0].lon], 6);
+                        L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+                          attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
+                        }).addTo(map${index});
+                        L.marker([data[0].lat, data[0].lon]).addTo(map${index})
+                          .bindPopup('${trace.ipInfo.location.replace(/'/g, "\\'")}')
+                          .openPopup();
+                      }
+                    } else {
+                      console.log('Não foi possível encontrar coordenadas para: ${trace.ipInfo.location}');
+                      const mapElement = document.getElementById('map-${index}');
+                      if (mapElement) {
+                        mapElement.innerHTML = '<p style="padding: 15px; text-align: center;">Não foi possível carregar o mapa para esta localização.</p>';
+                      }
+                    }
+                  })
+                  .catch(err => {
+                    console.error('Erro ao carregar mapa:', err);
+                    const mapElement = document.getElementById('map-${index}');
+                    if (mapElement) {
+                      mapElement.innerHTML = '<p style="padding: 15px; text-align: center;">Erro ao carregar o mapa.</p>';
+                    }
+                  });
+              } catch (e) {
+                console.error('Erro ao processar mapa:', e);
+              }
             `;
           }
           return '';
