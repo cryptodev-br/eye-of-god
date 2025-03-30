@@ -1,0 +1,41 @@
+{
+  "links": {
+    "b6d2ffc1-ba57-43d7-919b-a5560539c215": {
+      "id": "b6d2ffc1-ba57-43d7-919b-a5560539c215",
+      "targetUrl": "https://www.mk12.com",
+      "createdAt": "2025-03-30T14:30:30.523Z",
+      "createdBy": "::1"
+    },
+    "a79c0753-2ea9-4c58-bf88-9b049fcc49bc": {
+      "id": "a79c0753-2ea9-4c58-bf88-9b049fcc49bc",
+      "targetUrl": "https://www.julioboss.com",
+      "createdAt": "2025-03-30T14:35:21.906Z",
+      "createdBy": "::1"
+    },
+    "0131f2c0-bb93-4154-8829-01d72c4a5b91": {
+      "id": "0131f2c0-bb93-4154-8829-01d72c4a5b91",
+      "targetUrl": "https://www.julioboss.com",
+      "createdAt": "2025-03-30T14:50:31.119Z",
+      "createdBy": "::1"
+    }
+  },
+  "traces": {
+    "b6d2ffc1-ba57-43d7-919b-a5560539c215": [
+      {
+        "timestamp": "2025-03-30T14:30:50.979Z",
+        "ip": "::1",
+        "ipInfo": {
+          "ip": "::1",
+          "location": "Local (Simulado)",
+          "isp": "Local Network",
+          "asn": "N/A",
+          "org": "Local Network"
+        },
+        "userAgent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/134.0.0.0 Safari/537.36",
+        "referer": "Direto"
+      }
+    ],
+    "a79c0753-2ea9-4c58-bf88-9b049fcc49bc": [],
+    "0131f2c0-bb93-4154-8829-01d72c4a5b91": []
+  }
+}
