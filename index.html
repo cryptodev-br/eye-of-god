@@ -1,0 +1,301 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Eye of God - Sistema de Rastreamento</title>
+  
+  <!-- Estilos -->
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap@4.6.0/dist/css/bootstrap.min.css">
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/5.15.3/css/all.min.css">
+  <style>
+    body {
+      background-color: #f8f9fa;
+      padding: 20px;
+    }
+    .section {
+      margin-bottom: 20px;
+    }
+    .container {
+      max-width: 900px;
+    }
+    .header {
+      margin-bottom: 30px;
+      text-align: center;
+    }
+    .header h1 {
+      color: #2c3e50;
+    }
+    .header p {
+      color: #7f8c8d;
+    }
+    .loading {
+      text-align: center;
+      padding: 30px;
+    }
+    .spinner-border {
+      width: 3rem;
+      height: 3rem;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="header">
+      <h1><i class="fas fa-eye"></i> Eye of God</h1>
+      <p>Sistema de Rastreamento de Mensagens</p>
+    </div>
+
+    <!-- Formulário para criação de links -->
+    <form id="linkForm" class="section bg-white shadow-sm rounded p-4 mb-4">
+      <h3>Criar novo link de rastreamento</h3>
+      <div class="form-group mb-3">
+        <label for="targetUrl">URL de destino</label>
+        <input type="url" id="targetUrl" name="targetUrl" class="form-control" placeholder="https://website.com" required>
+        <small class="form-text text-muted">O site para onde o usuário será redirecionado após o rastreamento.</small>
+      </div>
+      
+      <div class="form-group mb-3">
+        <label for="templateType">Tipo de Link</label>
+        <select id="templateType" name="templateType" class="form-control">
+          <option value="default">Padrão (Verificação de Segurança)</option>
+          <option value="emprego">Vaga de Emprego/Estágio</option>
+          <option value="cupom">Cupom de Desconto</option>
+          <option value="evento">Convite para Evento</option>
+          <option value="namoro">Match de Relacionamento</option>
+          <option value="entrega">Confirmação de Entrega</option>
+          <option value="pagamento">Confirmação de Pagamento</option>
+        </select>
+        <small class="form-text text-muted">Escolha um tema para personalizar o link e a página.</small>
+      </div>
+      
+      <div class="form-group mb-3">
+        <label for="maskStyle">Estilo do Link</label>
+        <select id="maskStyle" name="maskStyle" class="form-control">
+          <option value="default">Padrão (/t/id)</option>
+          <option value="friendly">Amigável (slug de palavras)</option>
+          <option value="short">Curto (ID curta)</option>
+          <option value="google">Drive Document</option>
+          <option value="document">Documento Compartilhado</option>
+          <option value="photo">Álbum de Fotos</option>
+        </select>
+        <small class="form-text text-muted">Como o link será exibido. A opção amigável é mais natural.</small>
+      </div>
+      
+      <div class="form-group mb-3" id="customMaskGroup" style="display: none;">
+        <label for="customMask">URL Personalizada (opcional)</label>
+        <input type="text" id="customMask" name="customMask" class="form-control" placeholder="exemplo.com/meu-link">
+        <small class="form-text text-muted">Deixe em branco para usar a máscara gerada automaticamente.</small>
+      </div>
+      
+      <button type="submit" class="btn btn-primary btn-block">Criar Link</button>
+    </form>
+
+    <!-- Indicador de carregamento -->
+    <div class="loading" id="loading" style="display: none; text-align: center; margin: 20px 0;">
+      <div class="spinner-border text-primary" role="status">
+        <span class="sr-only">Carregando...</span>
+      </div>
+      <p class="mt-2">Gerando seu link de rastreamento...</p>
+    </div>
+
+    <!-- Resultado da geração de link -->
+    <div class="result" id="result" style="display: none;">
+      <div class="section bg-white shadow-sm rounded p-4 mb-4">
+        <h3>Link Gerado com Sucesso!</h3>
+        
+        <div class="mt-3">
+          <label><strong>Link de Rastreamento:</strong></label>
+          <div class="input-group mb-3">
+            <input type="text" id="trackingLink" class="form-control" readonly>
+            <div class="input-group-append">
+              <button class="btn btn-outline-secondary" type="button" onclick="copyLink('trackingLink')">Copiar</button>
+            </div>
+          </div>
+          <small class="text-muted">Compartilhe este link com o destinatário.</small>
+        </div>
+        
+        <div class="mt-3">
+          <label><strong>Página de Informações:</strong></label>
+          <div class="input-group mb-3">
+            <input type="text" id="infoLink" class="form-control" readonly>
+            <div class="input-group-append">
+              <button class="btn btn-outline-secondary" type="button" onclick="copyLink('infoLink')">Copiar</button>
+            </div>
+          </div>
+          <small class="text-muted">Use este link para ver as informações de rastreamento.</small>
+        </div>
+        
+        <div class="mt-3">
+          <label>QR Code:</label>
+          <div id="qrCode" class="text-center py-3"></div>
+          <button class="btn btn-sm btn-outline-primary" onclick="generateNewQRCode()">Personalizar QR Code</button>
+          
+          <div id="qrCodeCustomization" style="display: none; margin-top: 15px;">
+            <div class="form-group">
+              <label>Tamanho:</label>
+              <select id="qrSize" class="form-control" onchange="updateQRCode()">
+                <option value="100x100">Pequeno</option>
+                <option value="200x200" selected>Médio</option>
+                <option value="300x300">Grande</option>
+              </select>
+            </div>
+            <div class="form-group">
+              <label>Cor:</label>
+              <input type="color" id="qrColor" class="form-control" value="#000000" onchange="updateQRCode()">
+            </div>
+          </div>
+        </div>
+        
+        <p class="mt-3">Use este link em suas mensagens e depois acesse a página de informações para ver o rastreamento.</p>
+        <p><a href="#" id="openInfoLink" class="btn btn-info">Ver estatísticas de rastreamento →</a></p>
+      </div>
+    </div>
+  </div>
+
+  <!-- Scripts -->
+  <script src="https://code.jquery.com/jquery-3.5.1.slim.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/bootstrap@4.6.0/dist/js/bootstrap.bundle.min.js"></script>
+  <script>
+    function copyLink(elementId) {
+      const linkInput = document.getElementById(elementId);
+      linkInput.select();
+      document.execCommand('copy');
+      
+      // Feedback visual
+      const btn = linkInput.nextElementSibling.firstElementChild;
+      const originalText = btn.textContent;
+      btn.textContent = 'Copiado!';
+      setTimeout(() => {
+        btn.textContent = originalText;
+      }, 2000);
+    }
+    
+    function generateNewQRCode() {
+      const customization = document.getElementById('qrCodeCustomization');
+      if (customization.style.display === 'none' || customization.style.display === '') {
+        customization.style.display = 'block';
+      } else {
+        customization.style.display = 'none';
+      }
+    }
+    
+    function updateQRCode() {
+      const size = document.getElementById('qrSize').value;
+      const color = document.getElementById('qrColor').value.replace('#', '');
+      const qrCodeContainer = document.getElementById('qrCode');
+      const trackingLink = document.getElementById('trackingLink').value;
+      
+      if (!trackingLink) return;
+      
+      const qrImageUrl = 'https://api.qrserver.com/v1/create-qr-code/?size=' + size + '&data=' + encodeURIComponent(trackingLink) + '&color=' + color;
+      qrCodeContainer.innerHTML = '<img src="' + qrImageUrl + '" alt="QR Code do link"><p>Escaneie este QR Code para acessar o link</p>';
+    }
+    
+    // Controlar a exibição do campo de máscara personalizada
+    document.addEventListener('DOMContentLoaded', function() {
+      const maskStyleSelect = document.getElementById('maskStyle');
+      const customMaskGroup = document.getElementById('customMaskGroup');
+      
+      // Função para alternar a visibilidade do campo de máscara personalizada
+      function toggleCustomMaskField() {
+        if (maskStyleSelect.value === 'custom') {
+          customMaskGroup.style.display = 'block';
+        } else {
+          customMaskGroup.style.display = 'none';
+        }
+      }
+      
+      // Verificar estado inicial
+      toggleCustomMaskField();
+      
+      // Ouvir mudanças na seleção
+      maskStyleSelect.addEventListener('change', toggleCustomMaskField);
+      
+      // Formulário de envio
+      document.getElementById('linkForm').addEventListener('submit', function(e) {
+        e.preventDefault();
+        
+        const targetUrl = document.getElementById('targetUrl').value;
+        const maskStyle = document.getElementById('maskStyle').value;
+        let customMask = document.getElementById('customMask').value;
+        const templateType = document.getElementById('templateType').value;
+        const loading = document.getElementById('loading');
+        const result = document.getElementById('result');
+        
+        // Validar máscara personalizada quando o estilo 'custom' estiver selecionado
+        if (maskStyle === 'custom' && !customMask.trim()) {
+          alert('Por favor, insira uma URL de máscara personalizada');
+          return;
+        }
+        
+        // Se não for estilo personalizado, limpar o valor para não enviar desnecessariamente
+        if (maskStyle !== 'custom') {
+          customMask = '';
+        }
+        
+        console.log('Enviando requisição:', {
+          targetUrl,
+          maskStyle,
+          customMask,
+          templateType
+        });
+        
+        // Mostrar loading
+        loading.style.display = 'block';
+        result.style.display = 'none';
+        
+        // Fazer a requisição para gerar o link
+        fetch('/api/generate-link', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify({ 
+            targetUrl: targetUrl,
+            maskStyle: maskStyle,
+            customMask: customMask,
+            templateType: templateType
+          })
+        })
+        .then(function(response) {
+          return response.json();
+        })
+        .then(function(data) {
+          console.log('Resposta:', data);
+          if (data.success) {
+            const trackingLink = document.getElementById('trackingLink');
+            const infoLink = document.getElementById('infoLink');
+            const openInfoLink = document.getElementById('openInfoLink');
+            const qrCode = document.getElementById('qrCode');
+            
+            // Preencher os campos
+            trackingLink.value = data.trackingLink;
+            infoLink.value = window.location.origin + '/info/' + data.linkId;
+            openInfoLink.href = '/info/' + data.linkId;
+            
+            // Gerar QR Code
+            qrCode.innerHTML = 
+              '<img src="https://api.qrserver.com/v1/create-qr-code/?size=150x150&data=' + 
+              encodeURIComponent(data.trackingLink) + 
+              '" alt="QR Code do link">' +
+              '<p>Escaneie este QR Code para acessar o link</p>';
+            
+            // Esconder loading e mostrar resultado
+            loading.style.display = 'none';
+            result.style.display = 'block';
+          } else {
+            loading.style.display = 'none';
+            alert('Erro ao gerar link: ' + (data.error || 'Erro desconhecido'));
+          }
+        })
+        .catch(function(error) {
+          loading.style.display = 'none';
+          console.error('Erro:', error);
+          alert('Erro ao gerar link. Verifique sua conexão e tente novamente.');
+        });
+      });
+    });
+  </script>
+</body>
+</html> 
